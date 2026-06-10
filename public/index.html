@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Figurinhas P2P</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body>
+    <header>
+      <div>
+        <p class="eyebrow">Rede descentralizada</p>
+        <h1>Figurinhas P2P</h1>
+      </div>
+      <div class="identity">
+        <strong id="peer-id">Carregando...</strong>
+        <span id="peer-url"></span>
+      </div>
+    </header>
+
+    <main>
+      <section class="summary">
+        <article>
+          <span>Figurinhas</span>
+          <strong id="sticker-total">0</strong>
+        </article>
+        <article>
+          <span>Vizinhos online</span>
+          <strong id="peer-total">0</strong>
+        </article>
+        <article>
+          <span>Trocas concluídas</span>
+          <strong id="trade-total">0</strong>
+        </article>
+      </section>
+
+      <div id="notice" role="status"></div>
+
+      <section class="grid">
+        <article class="panel inventory-panel">
+          <div class="panel-title">
+            <div>
+              <p class="eyebrow">Coleção local</p>
+              <h2>Meu inventário</h2>
+            </div>
+            <button class="secondary" data-dialog="sticker-dialog">Cadastrar</button>
+          </div>
+          <div id="inventory" class="stickers empty">Nenhuma figurinha cadastrada.</div>
+        </article>
+
+        <article class="panel">
+          <p class="eyebrow">Inundação com TTL</p>
+          <h2>Buscar figurinha</h2>
+          <form id="search-form">
+            <label>
+              Código
+              <input name="sticker_id" placeholder="FIG-12" pattern="FIG-?\d{1,2}(\.PNG)?" required>
+            </label>
+            <label>
+              TTL
+              <input name="ttl" type="number" value="7" min="0" max="64" required>
+            </label>
+            <button>Buscar na rede</button>
+          </form>
+          <div id="search-results" class="feed"></div>
+        </article>
+
+        <article class="panel">
+          <p class="eyebrow">Conexões WebSocket</p>
+          <h2>Vizinhos</h2>
+          <form id="neighbor-form">
+            <label>
+              Endereço do nó
+              <input name="url" type="url" placeholder="ws://192.168.1.20:8080/p2p" required>
+            </label>
+            <button>Conectar</button>
+          </form>
+          <div id="peers" class="feed"></div>
+          <form id="inventory-query-form">
+            <label>
+              Consultar inventário de
+              <input name="peer_id" placeholder="ALUNO-02" required>
+            </label>
+            <button class="secondary">Consultar colega</button>
+          </form>
+          <div id="remote-inventory"></div>
+        </article>
+
+        <article class="panel">
+          <p class="eyebrow">Negociação direta</p>
+          <h2>Propor troca</h2>
+          <form id="trade-form">
+            <label>
+              Colega
+              <input name="peer_id" placeholder="ALUNO-02" required>
+            </label>
+            <label>
+              Eu ofereço
+              <input name="offer_sticker_id" placeholder="FIG-19" required>
+            </label>
+            <label>
+              Eu quero
+              <input name="want_sticker_id" placeholder="FIG-02" required>
+            </label>
+            <button>Enviar proposta</button>
+          </form>
+        </article>
+
+        <article class="panel wide">
+          <div class="panel-title">
+            <div>
+              <p class="eyebrow">Histórico persistente</p>
+              <h2>Trocas</h2>
+            </div>
+          </div>
+          <div id="trades" class="trade-list empty">Nenhuma troca registrada.</div>
+        </article>
+
+        <article class="panel wide">
+          <p class="eyebrow">Atividade do nó</p>
+          <h2>Eventos</h2>
+          <div id="events" class="event-log"></div>
+        </article>
+      </section>
+    </main>
+
+    <dialog id="sticker-dialog">
+      <form id="sticker-form">
+        <div class="panel-title">
+          <h2>Cadastrar figurinha</h2>
+          <button type="button" class="icon" data-close aria-label="Fechar">×</button>
+        </div>
+        <label>
+          Código
+          <input name="sticker_id" placeholder="FIG-19" required>
+        </label>
+        <label>
+          Quantidade
+          <input name="quantity" type="number" min="0" value="1" required>
+        </label>
+        <label>
+          URL da imagem PNG
+          <input name="image_url" type="url" placeholder="https://.../FIG-19.png">
+        </label>
+        <button>Salvar no inventário</button>
+      </form>
+    </dialog>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

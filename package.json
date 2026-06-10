@@ -1,0 +1,18 @@
+{
+  "name": "p2p-figurinhas",
+  "version": "1.0.0",
+  "description": "Sistema descentralizado de busca e troca de figurinhas por WebSocket",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}
