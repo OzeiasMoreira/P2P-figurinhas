@@ -3,3 +3,4 @@ data/
 config.json
 .env
 npm-debug.log*
+README.md
