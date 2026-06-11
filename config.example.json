@@ -2,7 +2,7 @@
   "peer_id": "ALUNO-19",
   "author_sticker": {
     "sticker_id": "FIG-19",
-    "image_url": "https://rgcoelho01.github.io/album/docs/images/FIG-19.png"
+    "image_url": "https://raw.githubusercontent.com/OzeiasMoreira/P2P-figurinhas/main/public/figurinhas/FIG-19.png"
   },
   "host": "0.0.0.0",
   "port": 8080,

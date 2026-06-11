@@ -11,17 +11,28 @@ class Store {
     this.filePath = filePath;
     this.initial = initial;
     this.state = this.#load();
+    this.save();
   }
 
   #load() {
     if (fs.existsSync(this.filePath)) {
       const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8"));
-      return {
+      const state = {
         inventory: parsed.inventory || {},
         processed_queries: parsed.processed_queries || [],
         searches: parsed.searches || [],
         trades: parsed.trades || []
       };
+      const authorStickerId = normalizeStickerId(this.initial.sticker_id);
+      if (!state.inventory[authorStickerId]) {
+        state.inventory[authorStickerId] = {
+          quantity: 28,
+          image_url: this.initial.image_url || ""
+        };
+      } else if (this.initial.image_url) {
+        state.inventory[authorStickerId].image_url = this.initial.image_url;
+      }
+      return state;
     }
 
     const stickerId = normalizeStickerId(this.initial.sticker_id);
@@ -36,8 +47,6 @@ class Store {
       searches: [],
       trades: []
     };
-    this.state = state;
-    this.save();
     return state;
   }
 

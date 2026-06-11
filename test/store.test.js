@@ -43,3 +43,19 @@ test("registra query_id apenas uma vez", (context) => {
   store.markQueryProcessed("query-1");
   assert.deepEqual(store.state.processed_queries, ["query-1"]);
 });
+
+test("atualiza a URL da figurinha autoral ao recarregar a configuração", (context) => {
+  const { directory, store } = temporaryStore();
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const filePath = store.filePath;
+
+  const reloaded = new Store(filePath, {
+    sticker_id: "FIG-01",
+    image_url: "https://example.test/nova-FIG-01.png"
+  });
+
+  assert.equal(
+    reloaded.inventoryList()[0].image_url,
+    "https://example.test/nova-FIG-01.png"
+  );
+});
