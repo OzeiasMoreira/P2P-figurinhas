@@ -6,8 +6,6 @@
   },
   "host": "0.0.0.0",
   "port": 8080,
-  "advertised_url": "ws://127.0.0.1:8080/p2p",
-  "neighbors": [
-    "ws://127.0.0.1:8081/p2p"
-  ]
+  "advertised_url": "auto",
+  "neighbors": []
 }

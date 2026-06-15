@@ -297,6 +297,11 @@ button.icon {
   border-top: 1px solid var(--line);
 }
 
+.network-help {
+  margin: 10px 0 0;
+  line-height: 1.5;
+}
+
 .trade-list {
   display: grid;
   gap: 10px;

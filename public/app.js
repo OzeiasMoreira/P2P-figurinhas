@@ -231,6 +231,9 @@ events.onmessage = async ({ data }) => {
   } else {
     renderSearchResults();
   }
+  if (event.type === "connection_error" || event.type === "protocol_error") {
+    notice(event.message || "Falha na conexão com o colega.", true);
+  }
 };
 events.onerror = () => notice("A conexão de eventos será restabelecida automaticamente.", true);
 

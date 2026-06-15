@@ -46,7 +46,7 @@ function createApplication(config) {
 
   server.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
-    if (url.pathname !== "/p2p") {
+    if (url.pathname !== "/" && url.pathname !== "/p2p") {
       socket.destroy();
       return;
     }
@@ -69,7 +69,7 @@ function createApplication(config) {
       const address = server.address();
       if (config.port === 0 && address && typeof address === "object") {
         config.port = address.port;
-        config.advertised_url = `ws://127.0.0.1:${address.port}/p2p`;
+        config.advertised_url = `ws://127.0.0.1:${address.port}`;
       }
       node.start();
       return address;
@@ -104,6 +104,7 @@ async function handleApi(request, response, url, context) {
     sendJson(response, 200, {
       peer_id: config.peer_id,
       advertised_url: config.advertised_url,
+      websocket_endpoints: websocketEndpoints(config.advertised_url),
       author_sticker: config.author_sticker,
       inventory: store.inventoryList(),
       peers: node.connectedPeers(),
@@ -222,6 +223,15 @@ function sendJson(response, status, data) {
     "Cache-Control": "no-store"
   });
   response.end(`${JSON.stringify(data)}\n`);
+}
+
+function websocketEndpoints(advertisedUrl) {
+  const parsed = new URL(advertisedUrl);
+  const root = new URL(parsed);
+  root.pathname = "/";
+  const p2p = new URL(parsed);
+  p2p.pathname = "/p2p";
+  return [...new Set([root.toString(), p2p.toString()])];
 }
 
 if (require.main === module) {

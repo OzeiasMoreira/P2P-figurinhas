@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const WebSocket = require("ws");
 const { createApplication } = require("../src/server");
 
 function config(directory, number) {
@@ -39,6 +40,46 @@ function waitForEvent(node, type, predicate = () => true, timeout = 5000) {
     node.on("event", listener);
   });
 }
+
+function connectAndHello(url, peerId) {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(url);
+    const timer = setTimeout(() => {
+      socket.terminate();
+      reject(new Error(`Tempo excedido conectando em ${url}`));
+    }, 3000);
+    socket.once("open", () => {
+      socket.send(JSON.stringify({
+        type: "HELLO",
+        message_id: `550e8400-e29b-41d4-a716-44665544${peerId.slice(-2)}00`,
+        sender_peer_id: peerId,
+        peers: []
+      }));
+    });
+    socket.once("message", () => {
+      clearTimeout(timer);
+      socket.close();
+      resolve();
+    });
+    socket.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+test("servidor aceita WebSocket na raiz e em /p2p", async (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "p2p-endpoints-"));
+  const app = createApplication(config(directory, 19));
+  context.after(async () => {
+    await app.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  await app.listen();
+
+  await connectAndHello(`ws://127.0.0.1:${app.config.port}`, "ALUNO-20");
+  await connectAndHello(`ws://127.0.0.1:${app.config.port}/p2p`, "ALUNO-21");
+});
 
 test("três nós encontram figurinha e concluem troca bilateral", async (context) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "p2p-network-"));

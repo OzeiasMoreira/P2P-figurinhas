@@ -336,6 +336,17 @@ class P2PNode extends EventEmitter {
             }
         }
 
+        if (Array.isArray(message.inventory)) {
+            this.inventorySnapshots.set(message.sender_peer_id, {
+                inventory: message.inventory,
+                received_at: new Date().toISOString()
+            });
+            this.#emit("inventory_response", {
+                peer_id: message.sender_peer_id,
+                inventory: message.inventory
+            });
+        }
+
         if (!socket.p2p.helloSent) {
             this.#sendHello(socket);
         }
@@ -554,7 +565,8 @@ class P2PNode extends EventEmitter {
         }
         this.#send(socket, createMessage("HELLO", {
             sender_peer_id: this.config.peer_id,
-            peers: [...new Set(peers)]
+            peers: [...new Set(peers)],
+            inventory: this.store.inventoryList()
         }));
         socket.p2p.helloSent = true;
     }
@@ -638,10 +650,7 @@ function normalizePeerUrl(rawUrl) {
     if (!parsed.port) {
         parsed.port = "8080";
     }
-    if (parsed.pathname === "/" || parsed.pathname === "") {
-        parsed.pathname = "/p2p";
-    }
-    return parsed.toString();
+  return parsed.toString();
 }
 
 module.exports = { P2PNode, normalizePeerUrl };

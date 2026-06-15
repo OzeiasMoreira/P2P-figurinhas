@@ -55,6 +55,10 @@ test("rejeita ttl inválido e campos obrigatórios ausentes", () => {
 });
 
 test("aceita IP puro anunciado pelo HELLO", () => {
-  assert.equal(normalizePeerUrl("192.168.1.10"), "ws://192.168.1.10:8080/p2p");
-  assert.equal(normalizePeerUrl("ws://localhost:8081"), "ws://localhost:8081/p2p");
+  assert.equal(normalizePeerUrl("192.168.1.10"), "ws://192.168.1.10:8080/");
+  assert.equal(normalizePeerUrl("ws://localhost:8081"), "ws://localhost:8081/");
+  assert.equal(
+    normalizePeerUrl("ws://localhost:8081/p2p"),
+    "ws://localhost:8081/p2p"
+  );
 });
