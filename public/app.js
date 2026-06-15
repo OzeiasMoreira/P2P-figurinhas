@@ -167,7 +167,7 @@ bindForm("#search-form", "/api/search", "Busca iniciada.", (body) => ({
   ...body,
   ttl: Number(body.ttl)
 }));
-bindForm("#neighbor-form", "/api/neighbors", "Tentando conectar ao vizinho.");
+bindForm("#neighbor-form", "/api/neighbors", "Vizinho conectado com sucesso.");
 bindForm("#trade-form", "/api/trades", "Proposta enviada.");
 bindForm("#inventory-query-form", "/api/inventory/query", "Consulta enviada.");
 bindForm("#sticker-form", "/api/stickers", "Inventário atualizado.", (body) => ({

@@ -81,6 +81,35 @@ test("servidor aceita WebSocket na raiz e em /p2p", async (context) => {
   await connectAndHello(`ws://127.0.0.1:${app.config.port}/p2p`, "ALUNO-21");
 });
 
+test("conexão manual aguarda o HELLO do vizinho", async (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "p2p-connect-"));
+  const first = createApplication(config(directory, 19));
+  const second = createApplication(config(directory, 20));
+  context.after(async () => {
+    await Promise.allSettled([first.close(), second.close()]);
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  await Promise.all([first.listen(), second.listen()]);
+
+  const connected = await first.node.connectAndWait(second.config.advertised_url);
+  assert.equal(connected.peer_id, "ALUNO-20");
+});
+
+test("conexão manual informa falha em destino indisponível", async (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "p2p-failure-"));
+  const app = createApplication(config(directory, 19));
+  context.after(async () => {
+    await app.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  await app.listen();
+
+  await assert.rejects(
+    app.node.connectAndWait("ws://127.0.0.1:1", 500),
+    /Nao foi possivel|Tempo esgotado/
+  );
+});
+
 test("três nós encontram figurinha e concluem troca bilateral", async (context) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "p2p-network-"));
   const apps = [1, 2, 3].map((number) => createApplication(config(directory, number)));

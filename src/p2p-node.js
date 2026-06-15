@@ -108,6 +108,55 @@ class P2PNode extends EventEmitter {
         return true;
     }
 
+    async connectAndWait(rawUrl, timeoutMs = 5000) {
+        const url = normalizePeerUrl(rawUrl);
+        if (!this.connect(url)) {
+            throw new Error("Endereco de vizinho invalido ou igual ao endereco local");
+        }
+
+        const socket = this.outboundSockets.get(url);
+        if (socket?.readyState === OPEN && socket.p2p?.peerId) {
+            return { peer_id: socket.p2p.peerId, url };
+        }
+
+        return new Promise((resolve, reject) => {
+            let settled = false;
+            const finish = (error) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                clearTimeout(timer);
+                clearInterval(poll);
+                socket?.off("error", onError);
+                socket?.off("close", onClose);
+                if (error) {
+                    this.#cancelOutboundConnection(url, socket);
+                    reject(error);
+                } else {
+                    resolve({ peer_id: socket.p2p.peerId, url });
+                }
+            };
+            const onError = (error) => finish(
+                new Error(`Nao foi possivel conectar em ${url}: ${error.message}`)
+            );
+            const onClose = () => finish(
+                new Error(`A conexao com ${url} foi encerrada antes do HELLO`)
+            );
+            const poll = setInterval(() => {
+                if (socket?.readyState === OPEN && socket.p2p?.peerId) {
+                    finish();
+                }
+            }, 50);
+            const timer = setTimeout(() => finish(
+                new Error(`Tempo esgotado conectando em ${url}`)
+            ), timeoutMs);
+
+            socket?.once("error", onError);
+            socket?.once("close", onClose);
+        });
+    }
+
     connectedPeers() {
         return [...this.peerSockets.entries()]
             .map(([peer_id, sockets]) => ({
@@ -614,7 +663,7 @@ class P2PNode extends EventEmitter {
     }
 
     #scheduleReconnect(url) {
-        if (this.stopped || this.reconnectTimers.has(url)) {
+        if (this.stopped || !this.knownPeerUrls.has(url) || this.reconnectTimers.has(url)) {
             return;
         }
         const timer = setTimeout(() => {
@@ -623,6 +672,24 @@ class P2PNode extends EventEmitter {
         }, 3000);
         timer.unref();
         this.reconnectTimers.set(url, timer);
+    }
+
+    #cancelOutboundConnection(url, socket) {
+        this.knownPeerUrls.delete(url);
+        const timer = this.reconnectTimers.get(url);
+        if (timer) {
+            clearTimeout(timer);
+            this.reconnectTimers.delete(url);
+        }
+        if (this.outboundSockets.get(url) === socket) {
+            this.outboundSockets.delete(url);
+        }
+        if (socket) {
+            socket.p2p.outboundUrl = null;
+            if ([OPEN, CONNECTING].includes(socket.readyState)) {
+                socket.terminate();
+            }
+        }
     }
 
     #emit(type, data = {}) {

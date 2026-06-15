@@ -140,10 +140,11 @@ async function handleApi(request, response, url, context) {
 
   if (request.method === "POST" && url.pathname === "/api/neighbors") {
     const body = await readJson(request);
-    if (!body.url || !node.connect(body.url)) {
+    if (!body.url) {
       throw new Error("Endereço de vizinho inválido ou igual ao endereço local");
     }
-    sendJson(response, 202, { url: body.url });
+    const peer = await node.connectAndWait(body.url);
+    sendJson(response, 200, peer);
     return;
   }
 
