@@ -286,15 +286,21 @@ class P2PNode extends EventEmitter {
         const type = accept ? "TRADE_ACCEPT" : "TRADE_REJECT";
         const status = accept ? "accepted" : "rejected";
         this.store.updateTrade(tradeId, { status }, "incoming");
+        const responseOffer = accept
+            ? trade.want_sticker_id
+            : trade.offer_sticker_id;
+        const responseWant = accept
+            ? trade.offer_sticker_id
+            : trade.want_sticker_id;
 
         const message = createMessage(type, {
             trade_id: tradeId,
             origin_peer_id: this.config.peer_id,
             sender_peer_id: this.config.peer_id,
             receiver_peer_id: trade.peer_id,
-            offer_sticker_id: trade.offer_sticker_id,
-            want_sticker_id: trade.want_sticker_id,
-            want_image_url: this.#imageUrl(trade.want_sticker_id)
+            offer_sticker_id: responseOffer,
+            want_sticker_id: responseWant,
+            offer_image_url: this.#imageUrl(responseOffer)
         });
         if (!this.#sendToPeer(trade.peer_id, message)) {
             this.store.updateTrade(tradeId, { status: "pending" }, "incoming");
@@ -550,7 +556,7 @@ class P2PNode extends EventEmitter {
         this.store.applyTrade(
             trade.offer_sticker_id,
             trade.want_sticker_id,
-            message.want_image_url || ""
+            message.offer_image_url || message.want_image_url || ""
         );
         this.store.updateTrade(tradeId, { status: "completed" }, "outgoing");
 
@@ -639,8 +645,7 @@ class P2PNode extends EventEmitter {
         }
         this.#send(socket, createMessage("HELLO", {
             sender_peer_id: this.config.peer_id,
-            peers: [...new Set(peers)],
-            inventory: this.store.inventoryList()
+            peers: [...new Set(peers)]
         }));
         socket.p2p.helloSent = true;
     }

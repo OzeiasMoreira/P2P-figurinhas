@@ -147,8 +147,11 @@ function validateMessage(input) {
     }
   }
 
-  if (message.type === "SEARCH") {
+  if (["SEARCH", "SEARCH_HIT", "SEARCH_MISS"].includes(message.type)) {
     requireUuid(message.query_id, "query_id");
+  }
+
+  if (message.type === "SEARCH") {
     if (!Number.isInteger(message.ttl) || message.ttl < 0 || message.ttl > 64) {
       throw new ProtocolError("ttl deve ser um inteiro entre 0 e 64");
     }

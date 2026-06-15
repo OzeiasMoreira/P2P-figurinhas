@@ -56,15 +56,40 @@ function connectAndHello(url, peerId) {
         peers: []
       }));
     });
-    socket.once("message", () => {
+    socket.once("message", (data) => {
       clearTimeout(timer);
       socket.close();
-      resolve();
+      resolve(JSON.parse(data.toString("utf8")));
     });
     socket.once("error", (error) => {
       clearTimeout(timer);
       reject(error);
     });
+  });
+}
+
+function waitForWireMessage(node, type, predicate = () => true, timeout = 3000) {
+  return new Promise((resolve, reject) => {
+    const sockets = [...node.sockets];
+    const timer = setTimeout(() => {
+      for (const socket of sockets) {
+        socket.off("message", listener);
+      }
+      reject(new Error(`Tempo excedido aguardando mensagem ${type}`));
+    }, timeout);
+    const listener = (data) => {
+      const message = JSON.parse(data.toString("utf8"));
+      if (message.type === type && predicate(message)) {
+        clearTimeout(timer);
+        for (const socket of sockets) {
+          socket.off("message", listener);
+        }
+        resolve(message);
+      }
+    };
+    for (const socket of sockets) {
+      socket.on("message", listener);
+    }
   });
 }
 
@@ -77,7 +102,18 @@ test("servidor aceita WebSocket na raiz e em /p2p", async (context) => {
   });
   await app.listen();
 
-  await connectAndHello(`ws://127.0.0.1:${app.config.port}`, "ALUNO-20");
+  const hello = await connectAndHello(
+    `ws://127.0.0.1:${app.config.port}`,
+    "ALUNO-20"
+  );
+  assert.equal(hello.type, "HELLO");
+  assert.equal(hello.sender_peer_id, "ALUNO-19");
+  assert.ok(Array.isArray(hello.peers));
+  assert.deepEqual(
+    Object.keys(hello).sort(),
+    ["message_id", "peers", "sender_peer_id", "type"]
+  );
+
   await connectAndHello(`ws://127.0.0.1:${app.config.port}/p2p`, "ALUNO-21");
 });
 
@@ -146,9 +182,27 @@ test("três nós encontram figurinha e concluem troca bilateral", async (context
     "search_hit",
     (event) => event.peer_id === "ALUNO-03" && event.sticker_id === "FIG-03"
   );
+  const searchWirePromise = waitForWireMessage(
+    second.node,
+    "SEARCH",
+    (message) => message.origin_peer_id === "ALUNO-01"
+  );
+  const hitWirePromise = waitForWireMessage(
+    first.node,
+    "SEARCH_HIT",
+    (message) => message.origin_peer_id === "ALUNO-03"
+  );
   first.node.startSearch("FIG-03", 7);
+  const searchWire = await searchWirePromise;
+  assert.equal(searchWire.sender_peer_id, "ALUNO-01");
+  assert.equal(searchWire.sticker_id, "FIG-03");
+  assert.equal(searchWire.ttl, 7);
+  assert.match(searchWire.query_id, /^[0-9a-f-]{36}$/i);
   const hit = await hitPromise;
+  const hitWire = await hitWirePromise;
   assert.equal(hit.peer_id, "ALUNO-03");
+  assert.equal(hitWire.receiver_peer_id, "ALUNO-01");
+  assert.equal(hitWire.sticker_id, "FIG-03");
 
   if (!first.node.connectedPeers().some((peer) => peer.peer_id === "ALUNO-03")) {
     await waitForEvent(
@@ -159,9 +213,13 @@ test("três nós encontram figurinha e concluem troca bilateral", async (context
   }
 
   const offerPromise = waitForEvent(third.node, "trade_offer");
+  const offerWirePromise = waitForWireMessage(third.node, "TRADE_OFFER");
   const outgoing = first.node.offerTrade("ALUNO-03", "FIG-01", "FIG-03");
   const incoming = await offerPromise;
+  const offerWire = await offerWirePromise;
   assert.equal(incoming.trade_id, outgoing.trade_id);
+  assert.equal(offerWire.offer_sticker_id, "FIG-01");
+  assert.equal(offerWire.want_sticker_id, "FIG-03");
 
   const firstCompleted = waitForEvent(
     first.node,
@@ -173,8 +231,19 @@ test("três nós encontram figurinha e concluem troca bilateral", async (context
     "trade_updated",
     (event) => event.trade_id === outgoing.trade_id && event.status === "completed"
   );
+  const acceptWirePromise = waitForWireMessage(first.node, "TRADE_ACCEPT");
+  const confirmWirePromise = waitForWireMessage(third.node, "TRANSFER_CONFIRM");
   third.node.respondToTrade(incoming.trade_id, true);
+  const acceptWire = await acceptWirePromise;
+  const confirmWire = await confirmWirePromise;
   await Promise.all([firstCompleted, thirdCompleted]);
+
+  assert.equal(acceptWire.origin_peer_id, "ALUNO-03");
+  assert.equal(acceptWire.offer_sticker_id, "FIG-03");
+  assert.equal(acceptWire.want_sticker_id, "FIG-01");
+  assert.equal(confirmWire.origin_peer_id, "ALUNO-01");
+  assert.equal(confirmWire.offer_sticker_id, "FIG-01");
+  assert.equal(confirmWire.want_sticker_id, "FIG-03");
 
   assert.equal(first.store.quantity("FIG-01"), 27);
   assert.equal(first.store.quantity("FIG-03"), 1);

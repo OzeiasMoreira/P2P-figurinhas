@@ -62,3 +62,46 @@ test("aceita IP puro anunciado pelo HELLO", () => {
     "ws://localhost:8081/p2p"
   );
 });
+
+test("valida SEARCH_HIT e SEARCH_MISS com query_id UUID", () => {
+  for (const type of ["SEARCH_HIT", "SEARCH_MISS"]) {
+    assert.doesNotThrow(() => validateMessage({
+      type,
+      message_id: "550e8400-e29b-41d4-a716-446655440001",
+      origin_peer_id: "ALUNO-02",
+      sender_peer_id: "ALUNO-02",
+      receiver_peer_id: "ALUNO-01",
+      query_id: "550e8400-e29b-41d4-a716-446655440000",
+      sticker_id: "FIG-02"
+    }));
+    assert.throws(() => validateMessage({
+      type,
+      message_id: "550e8400-e29b-41d4-a716-446655440001",
+      origin_peer_id: "ALUNO-02",
+      sender_peer_id: "ALUNO-02",
+      receiver_peer_id: "ALUNO-01",
+      query_id: "query-invalida",
+      sticker_id: "FIG-02"
+    }), /query_id deve ser um UUID/);
+  }
+});
+
+test("valida os campos obrigatórios das mensagens de troca", () => {
+  const fields = {
+    message_id: "550e8400-e29b-41d4-a716-446655440010",
+    origin_peer_id: "ALUNO-19",
+    sender_peer_id: "ALUNO-19",
+    receiver_peer_id: "ALUNO-23",
+    offer_sticker_id: "FIG-19",
+    want_sticker_id: "FIG-23"
+  };
+
+  for (const type of [
+    "TRADE_OFFER",
+    "TRADE_ACCEPT",
+    "TRADE_REJECT",
+    "TRANSFER_CONFIRM"
+  ]) {
+    assert.doesNotThrow(() => validateMessage({ type, ...fields }));
+  }
+});
