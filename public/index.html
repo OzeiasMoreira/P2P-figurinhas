@@ -78,7 +78,16 @@
           <p class="muted network-help">
             Use o IP exibido pelo colega, por exemplo: ws://172.16.2.50:8080
           </p>
-          <div id="peers" class="feed"></div>
+          <div class="connection-groups">
+            <section>
+              <h3>Conectei com</h3>
+              <div id="outgoing-peers" class="feed compact-feed"></div>
+            </section>
+            <section>
+              <h3>Conectaram comigo</h3>
+              <div id="incoming-peers" class="feed compact-feed"></div>
+            </section>
+          </div>
           <form id="inventory-query-form">
             <label>
               Consultar inventário de
@@ -115,13 +124,24 @@
               <p class="eyebrow">Histórico persistente</p>
               <h2>Trocas</h2>
             </div>
+            <button class="secondary small" data-clear-history="trades">
+              Limpar encerradas
+            </button>
           </div>
           <div id="trades" class="trade-list empty">Nenhuma troca registrada.</div>
         </article>
 
         <article class="panel wide">
           <p class="eyebrow">Atividade do nó</p>
-          <h2>Eventos</h2>
+          <div class="panel-title activity-title">
+            <h2>O que esta acontecendo</h2>
+            <div class="panel-actions">
+              <button class="secondary small" data-clear-events>Limpar tela</button>
+              <button class="secondary small" data-clear-history="searches">
+                Limpar buscas
+              </button>
+            </div>
+          </div>
           <div id="events" class="event-log"></div>
         </article>
       </section>

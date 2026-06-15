@@ -225,6 +225,12 @@ button.icon {
   font-size: 1.3rem;
 }
 
+button.small {
+  min-height: 34px;
+  padding-inline: 12px;
+  font-size: .78rem;
+}
+
 .stickers {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
@@ -291,6 +297,44 @@ button.icon {
   gap: 12px;
 }
 
+.connection-groups {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.connection-groups section {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #0b111c;
+}
+
+.connection-groups h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: .76rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.compact-feed {
+  margin-top: 10px;
+}
+
+.peer-card {
+  display: grid;
+  gap: 3px;
+}
+
+.peer-card .peer-meta {
+  color: var(--muted);
+  font-size: .72rem;
+  overflow-wrap: anywhere;
+}
+
 #inventory-query-form {
   margin-top: 20px;
   padding-top: 18px;
@@ -305,6 +349,10 @@ button.icon {
 .trade-list {
   display: grid;
   gap: 10px;
+}
+
+.trade-list .trade:nth-child(n+9) {
+  display: none;
 }
 
 .trade {
@@ -351,9 +399,39 @@ button.icon {
   font-size: .78rem;
 }
 
-.event-log div {
-  padding: 7px 0;
+.event-item {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 10px;
+  padding: 9px 0;
   border-bottom: 1px solid rgb(42 56 80 / 55%);
+}
+
+.event-time {
+  color: #6f829d;
+}
+
+.event-message {
+  color: var(--text);
+}
+
+.event-message.error {
+  color: var(--danger);
+}
+
+.panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: end;
+  gap: 8px;
+}
+
+.activity-title {
+  align-items: center;
+}
+
+.activity-title h2 {
+  margin-bottom: 0;
 }
 
 .empty {
@@ -391,5 +469,9 @@ dialog::backdrop {
 
   .wide {
     grid-column: auto;
+  }
+
+  .connection-groups {
+    grid-template-columns: 1fr;
   }
 }

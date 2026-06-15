@@ -160,6 +160,28 @@ class Store {
     this.save();
     return trade;
   }
+
+  clearHistory(scopes = []) {
+    const selected = new Set(scopes);
+    const cleared = {};
+
+    if (selected.has("searches")) {
+      cleared.searches = this.state.searches.length;
+      this.state.searches = [];
+    }
+
+    if (selected.has("trades")) {
+      const activeStatuses = new Set(["pending", "accepted"]);
+      const activeTrades = this.state.trades.filter(
+        (trade) => activeStatuses.has(trade.status)
+      );
+      cleared.trades = this.state.trades.length - activeTrades.length;
+      this.state.trades = activeTrades;
+    }
+
+    this.save();
+    return cleared;
+  }
 }
 
 module.exports = { Store };

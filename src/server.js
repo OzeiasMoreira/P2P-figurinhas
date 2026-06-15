@@ -177,6 +177,20 @@ async function handleApi(request, response, url, context) {
     return;
   }
 
+  if (request.method === "DELETE" && url.pathname === "/api/history") {
+    const body = await readJson(request);
+    const scopes = Array.isArray(body.scopes) ? body.scopes : [];
+    const allowed = scopes.filter((scope) => ["searches", "trades"].includes(scope));
+    const cleared = store.clearHistory(allowed);
+    node.emit("event", {
+      type: "history_cleared",
+      timestamp: new Date().toISOString(),
+      scopes: allowed
+    });
+    sendJson(response, 200, { cleared });
+    return;
+  }
+
   sendJson(response, 404, { error: "Rota não encontrada" });
 }
 

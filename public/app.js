@@ -30,6 +30,7 @@ function render() {
   if (!status) {
     return;
   }
+
   $("#peer-id").textContent = status.peer_id;
   $("#peer-url").textContent = status.advertised_url;
   $("#sticker-total").textContent = status.inventory.reduce(
@@ -54,6 +55,7 @@ function renderInventory(inventory) {
     container.textContent = "Nenhuma figurinha cadastrada.";
     return;
   }
+
   container.className = "stickers";
   container.innerHTML = inventory.map((item) => `
     <article class="sticker">
@@ -64,21 +66,38 @@ function renderInventory(inventory) {
       </div>
       <div class="sticker-info">
         <strong>${item.sticker_id}</strong>
-        <span>×${item.quantity}</span>
+        <span>x${item.quantity}</span>
       </div>
     </article>
   `).join("");
 }
 
 function renderPeers(peers) {
-  const container = $("#peers");
+  renderPeerGroup(
+    "#outgoing-peers",
+    peers.filter((peer) => peer.outgoing),
+    "Voce ainda nao iniciou conexoes."
+  );
+  renderPeerGroup(
+    "#incoming-peers",
+    peers.filter((peer) => peer.incoming),
+    "Nenhum colega conectou com voce."
+  );
+}
+
+function renderPeerGroup(selector, peers, emptyMessage) {
+  const container = $(selector);
   if (!peers.length) {
-    container.innerHTML = '<p class="empty">Nenhum vizinho conectado.</p>';
+    container.innerHTML = `<p class="empty">${emptyMessage}</p>`;
     return;
   }
+
   container.innerHTML = peers.map((peer) => `
     <div class="feed-item">
-      <strong>${peer.peer_id}</strong>
+      <div class="peer-card">
+        <strong>${peer.peer_id}</strong>
+        <span class="peer-meta">${escapeHtml(peer.urls[0] || "conexao recebida")}</span>
+      </div>
       <span class="status completed">online</span>
     </div>
   `).join("");
@@ -91,13 +110,14 @@ function renderTrades(trades) {
     container.textContent = "Nenhuma troca registrada.";
     return;
   }
+
   container.className = "trade-list";
   container.innerHTML = trades.map((trade) => {
     const incomingPending = trade.direction === "incoming" && trade.status === "pending";
     return `
       <article class="trade">
         <div>
-          <p><strong>${trade.peer_id}</strong> · ${trade.direction === "incoming" ? "recebida" : "enviada"}</p>
+          <p><strong>${trade.peer_id}</strong> - ${trade.direction === "incoming" ? "recebida" : "enviada"}</p>
           <span class="muted">Oferece ${trade.offer_sticker_id} por ${trade.want_sticker_id}</span>
         </div>
         <div class="trade-actions">
@@ -114,9 +134,10 @@ function renderTrades(trades) {
 function renderSearchResults() {
   const container = $("#search-results");
   if (!state.searchResults.length) {
-    container.innerHTML = '<p class="empty">Os resultados aparecerão aqui.</p>';
+    container.innerHTML = '<p class="empty">Os resultados aparecerao aqui.</p>';
     return;
   }
+
   container.innerHTML = state.searchResults.map((result) => `
     <div class="feed-item">
       <div>
@@ -129,13 +150,53 @@ function renderSearchResults() {
 }
 
 function addEvent(event) {
+  if (!eventMessage(event)) {
+    return;
+  }
+
   state.events.unshift(event);
-  state.events = state.events.slice(0, 80);
-  $("#events").innerHTML = state.events.map((item) => `
-    <div>${new Date(item.timestamp || Date.now()).toLocaleTimeString()} ·
-      ${escapeHtml(item.type)}${item.message ? ` · ${escapeHtml(item.message)}` : ""}
+  state.events = state.events.slice(0, 20);
+  renderEvents();
+}
+
+function renderEvents() {
+  const container = $("#events");
+  if (!state.events.length) {
+    container.innerHTML = '<p class="empty">Nenhuma atividade recente.</p>';
+    return;
+  }
+
+  container.innerHTML = state.events.map((event) => `
+    <div class="event-item">
+      <span class="event-time">${new Date(event.timestamp || Date.now()).toLocaleTimeString()}</span>
+      <span class="event-message ${isErrorEvent(event) ? "error" : ""}">
+        ${escapeHtml(eventMessage(event))}
+      </span>
     </div>
   `).join("");
+}
+
+function eventMessage(event) {
+  const messages = {
+    peer_connected: event.direction === "incoming"
+      ? `${event.peer_id} conectou com voce`
+      : `Voce conectou com ${event.peer_id}`,
+    peer_disconnected: `${event.peer_id} desconectou`,
+    search_started: `Buscando ${event.sticker_id} na rede`,
+    search_hit: `${event.sticker_id} encontrada em ${event.peer_id}`,
+    trade_offer: `Nova proposta recebida de ${event.peer_id}`,
+    trade_updated: `Troca com ${event.peer_id} esta ${translateStatus(event.status)}`,
+    inventory_response: `Inventario de ${event.peer_id} recebido`,
+    connection_error: event.message || "Falha ao conectar com um vizinho",
+    protocol_error: event.message || "Mensagem de protocolo invalida",
+    history_cleared: "Historico limpo"
+  };
+  return messages[event.type] || "";
+}
+
+function isErrorEvent(event) {
+  return event.type === "connection_error" || event.type === "protocol_error" ||
+    event.status === "failed";
 }
 
 function notice(message, error = false) {
@@ -170,7 +231,7 @@ bindForm("#search-form", "/api/search", "Busca iniciada.", (body) => ({
 bindForm("#neighbor-form", "/api/neighbors", "Vizinho conectado com sucesso.");
 bindForm("#trade-form", "/api/trades", "Proposta enviada.");
 bindForm("#inventory-query-form", "/api/inventory/query", "Consulta enviada.");
-bindForm("#sticker-form", "/api/stickers", "Inventário atualizado.", (body) => ({
+bindForm("#sticker-form", "/api/stickers", "Inventario atualizado.", (body) => ({
   ...body,
   quantity: Number(body.quantity)
 }));
@@ -180,11 +241,40 @@ $("#sticker-form").addEventListener("submit", () => {
 });
 
 document.addEventListener("click", async (event) => {
+  const clearEventsButton = event.target.closest("[data-clear-events]");
+  if (clearEventsButton) {
+    state.events = [];
+    renderEvents();
+    return;
+  }
+
+  const clearHistoryButton = event.target.closest("[data-clear-history]");
+  if (clearHistoryButton) {
+    const scope = clearHistoryButton.dataset.clearHistory;
+    try {
+      await api("/api/history", {
+        method: "DELETE",
+        body: JSON.stringify({ scopes: [scope] })
+      });
+      if (scope === "searches") {
+        state.searchResults = [];
+      }
+      notice(scope === "trades"
+        ? "Trocas encerradas removidas."
+        : "Historico de buscas removido.");
+      await refresh();
+    } catch (error) {
+      notice(error.message, true);
+    }
+    return;
+  }
+
   const openButton = event.target.closest("[data-dialog]");
   if (openButton) {
     $(`#${openButton.dataset.dialog}`).showModal();
     return;
   }
+
   if (event.target.closest("[data-close]")) {
     event.target.closest("dialog").close();
     return;
@@ -209,9 +299,11 @@ const events = new EventSource("/api/events");
 events.onmessage = async ({ data }) => {
   const event = JSON.parse(data);
   addEvent(event);
+
   if (event.type === "search_hit") {
     state.searchResults.unshift(event);
   }
+
   if (event.type === "inventory_response") {
     $("#remote-inventory").innerHTML = `
       <h3>${event.peer_id}</h3>
@@ -219,28 +311,33 @@ events.onmessage = async ({ data }) => {
         ${event.inventory.map((item) => `
           <div class="feed-item">
             <strong>${item.sticker_id}</strong>
-            <span>×${item.quantity}</span>
+            <span>x${item.quantity}</span>
           </div>
-        `).join("") || '<p class="empty">Inventário vazio.</p>'}
+        `).join("") || '<p class="empty">Inventario vazio.</p>'}
       </div>
     `;
   }
+
   if (["peer_connected", "peer_disconnected", "trade_offer", "trade_updated",
-    "inventory_updated", "search_hit"].includes(event.type)) {
+    "inventory_updated", "search_hit", "history_cleared"].includes(event.type)) {
     await refresh();
   } else {
     renderSearchResults();
   }
-  if (event.type === "connection_error" || event.type === "protocol_error") {
-    notice(event.message || "Falha na conexão com o colega.", true);
+
+  if (isErrorEvent(event)) {
+    notice(event.message || "Falha na conexao com o colega.", true);
   }
 };
-events.onerror = () => notice("A conexão de eventos será restabelecida automaticamente.", true);
+events.onerror = () => notice(
+  "A conexao de eventos sera restabelecida automaticamente.",
+  true
+);
 
 function translateStatus(status) {
   return {
     accepted: "aceita",
-    completed: "concluída",
+    completed: "concluida",
     failed: "falhou",
     pending: "pendente",
     rejected: "rejeitada"
@@ -256,4 +353,5 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+renderEvents();
 refresh().catch((error) => notice(error.message, true));

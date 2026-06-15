@@ -33,7 +33,7 @@ class P2PNode extends EventEmitter {
     start() {
         this.stopped = false;
         for (const url of this.knownPeerUrls) {
-            this.connect(url);
+            this.connect(url, "configured");
         }
     }
 
@@ -48,7 +48,7 @@ class P2PNode extends EventEmitter {
         }
     }
 
-    attach(socket, outboundUrl = null) {
+    attach(socket, outboundUrl = null, connectionSource = "incoming") {
         if (this.sockets.has(socket)) {
             return;
         }
@@ -56,7 +56,9 @@ class P2PNode extends EventEmitter {
         socket.p2p = {
             peerId: null,
             outboundUrl,
-            helloSent: false
+            connectionSource,
+            helloSent: false,
+            connectedAt: new Date().toISOString()
         };
         this.sockets.add(socket);
         if (outboundUrl) {
@@ -84,7 +86,7 @@ class P2PNode extends EventEmitter {
         }
     }
 
-    connect(rawUrl) {
+    connect(rawUrl, connectionSource = "manual") {
         let url;
         try {
             url = normalizePeerUrl(rawUrl);
@@ -93,7 +95,7 @@ class P2PNode extends EventEmitter {
             return false;
         }
 
-        if (url === this.config.advertised_url) {
+        if (url === normalizePeerUrl(this.config.advertised_url)) {
             return false;
         }
 
@@ -104,7 +106,7 @@ class P2PNode extends EventEmitter {
         }
 
         const socket = new WebSocket(url);
-        this.attach(socket, url);
+        this.attach(socket, url, connectionSource);
         return true;
     }
 
@@ -159,13 +161,29 @@ class P2PNode extends EventEmitter {
 
     connectedPeers() {
         return [...this.peerSockets.entries()]
-            .map(([peer_id, sockets]) => ({
-                peer_id,
-                connections: [...sockets].filter((socket) => socket.readyState === OPEN).length,
-                urls: [...sockets]
-                    .map((socket) => socket.p2p.outboundUrl)
-                    .filter(Boolean)
-            }))
+            .map(([peer_id, sockets]) => {
+                const openSockets = [...sockets].filter(
+                    (socket) => socket.readyState === OPEN
+                );
+                const outgoing = openSockets.some((socket) =>
+                    ["manual", "configured"].includes(socket.p2p.connectionSource)
+                );
+                return {
+                    peer_id,
+                    connections: openSockets.length,
+                    incoming: !outgoing && openSockets.some(
+                        (socket) => !socket.p2p.outboundUrl
+                    ),
+                    outgoing,
+                    connected_at: openSockets
+                        .map((socket) => socket.p2p.connectedAt)
+                        .sort()[0] || null,
+                    urls: openSockets
+                        .filter((socket) => socket.p2p.connectionSource !== "discovered")
+                        .map((socket) => socket.p2p.outboundUrl)
+                        .filter(Boolean)
+                };
+            })
             .filter((peer) => peer.connections > 0)
             .sort((a, b) => a.peer_id.localeCompare(b.peer_id));
     }
@@ -381,7 +399,7 @@ class P2PNode extends EventEmitter {
 
         for (const peerUrl of message.peers || []) {
             if (typeof peerUrl === "string" && peerUrl !== this.config.advertised_url) {
-                this.connect(peerUrl);
+                this.connect(peerUrl, "discovered");
             }
         }
 
@@ -399,7 +417,14 @@ class P2PNode extends EventEmitter {
         if (!socket.p2p.helloSent) {
             this.#sendHello(socket);
         }
-        this.#emit("peer_connected", { peer_id: message.sender_peer_id });
+        const initiatedLocally = ["manual", "configured"].includes(
+            socket.p2p.connectionSource
+        );
+        this.#emit("peer_connected", {
+            peer_id: message.sender_peer_id,
+            direction: initiatedLocally ? "outgoing" : "incoming",
+            peer_url: socket.p2p.outboundUrl || null
+        });
     }
 
     #handleSearch(socket, message) {
@@ -464,7 +489,7 @@ class P2PNode extends EventEmitter {
                 };
                 this.store.addSearch({ kind: "SEARCH_HIT", ...result });
                 if (message.peer_url) {
-                    this.connect(message.peer_url);
+                    this.connect(message.peer_url, "discovered");
                 }
                 this.#emit("search_hit", result);
             } else {
@@ -650,7 +675,10 @@ class P2PNode extends EventEmitter {
         if (socket.p2p?.outboundUrl &&
             this.outboundSockets.get(socket.p2p.outboundUrl) === socket) {
             this.outboundSockets.delete(socket.p2p.outboundUrl);
-            this.#scheduleReconnect(socket.p2p.outboundUrl);
+            this.#scheduleReconnect(
+                socket.p2p.outboundUrl,
+                socket.p2p.connectionSource
+            );
         }
         if (socket.p2p?.peerId) {
             const peers = this.peerSockets.get(socket.p2p.peerId);
@@ -662,13 +690,13 @@ class P2PNode extends EventEmitter {
         }
     }
 
-    #scheduleReconnect(url) {
+    #scheduleReconnect(url, connectionSource = "manual") {
         if (this.stopped || !this.knownPeerUrls.has(url) || this.reconnectTimers.has(url)) {
             return;
         }
         const timer = setTimeout(() => {
             this.reconnectTimers.delete(url);
-            this.connect(url);
+            this.connect(url, connectionSource);
         }, 3000);
         timer.unref();
         this.reconnectTimers.set(url, timer);

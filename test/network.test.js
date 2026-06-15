@@ -93,6 +93,10 @@ test("conexão manual aguarda o HELLO do vizinho", async (context) => {
 
   const connected = await first.node.connectAndWait(second.config.advertised_url);
   assert.equal(connected.peer_id, "ALUNO-20");
+  assert.equal(first.node.connectedPeers()[0].outgoing, true);
+  assert.equal(first.node.connectedPeers()[0].incoming, false);
+  assert.equal(second.node.connectedPeers()[0].incoming, true);
+  assert.equal(second.node.connectedPeers()[0].outgoing, false);
 });
 
 test("conexão manual informa falha em destino indisponível", async (context) => {

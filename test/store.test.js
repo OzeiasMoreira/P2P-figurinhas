@@ -59,3 +59,23 @@ test("atualiza a URL da figurinha autoral ao recarregar a configuração", (cont
     "https://example.test/nova-FIG-01.png"
   );
 });
+
+test("limpa historico sem apagar trocas ativas", (context) => {
+  const { directory, store } = temporaryStore();
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  store.addSearch({ query_id: "query-1", sticker_id: "FIG-02" });
+  store.addTrade({ trade_id: "pending", status: "pending" });
+  store.addTrade({ trade_id: "accepted", status: "accepted" });
+  store.addTrade({ trade_id: "failed", status: "failed" });
+  store.addTrade({ trade_id: "completed", status: "completed" });
+
+  const cleared = store.clearHistory(["searches", "trades"]);
+
+  assert.deepEqual(cleared, { searches: 1, trades: 2 });
+  assert.deepEqual(
+    store.state.trades.map((trade) => trade.trade_id),
+    ["pending", "accepted"]
+  );
+  assert.deepEqual(store.state.searches, []);
+});
