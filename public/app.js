@@ -3,7 +3,8 @@
 const state = {
   status: null,
   searchResults: [],
-  events: []
+  events: [],
+  inventoryOpen: false
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -50,26 +51,40 @@ function render() {
 
 function renderInventory(inventory) {
   const container = $("#inventory");
-  if (!inventory.length) {
-    container.className = "stickers empty";
-    container.textContent = "Nenhuma figurinha cadastrada.";
-    return;
-  }
-
-  container.className = "stickers";
-  container.innerHTML = inventory.map((item) => `
-    <article class="sticker">
+  const inventoryById = new Map(inventory.map((item) => [item.sticker_id, item]));
+  const ownedSlots = Array.from({ length: 28 }, (_, index) => {
+    const stickerId = `FIG-${String(index + 1).padStart(2, "0")}`;
+    return (inventoryById.get(stickerId)?.quantity || 0) > 0;
+  }).filter(Boolean).length;
+  const albumSlots = Array.from({ length: 28 }, (_, index) => {
+    const stickerId = `FIG-${String(index + 1).padStart(2, "0")}`;
+    const item = inventoryById.get(stickerId);
+    const quantity = item?.quantity || 0;
+    return `
+    <article class="sticker ${quantity > 0 ? "owned" : "missing"}">
       <div class="sticker-image">
-        ${item.image_url
+        ${item?.image_url
           ? `<img src="${escapeHtml(item.image_url)}" alt="${item.sticker_id}">`
-          : `<span>${item.sticker_id.slice(-2)}</span>`}
+          : `<span>${String(index + 1).padStart(2, "0")}</span>`}
       </div>
       <div class="sticker-info">
-        <strong>${item.sticker_id}</strong>
-        <span>x${item.quantity}</span>
+        <strong>Figurinha ${String(index + 1).padStart(2, "0")}</strong>
+        <span>${quantity > 0 ? `x${quantity}` : "faltando"}</span>
       </div>
     </article>
-  `).join("");
+  `;
+  });
+
+  container.className = "stickers album-page";
+  container.hidden = !state.inventoryOpen;
+  container.innerHTML = albumSlots.join("");
+  $("#inventory-summary").textContent = state.inventoryOpen
+    ? `${ownedSlots} de 28 figurinhas no álbum.`
+    : `${ownedSlots} de 28 figurinhas. Abra o inventário para ver a página do álbum.`;
+
+  const toggleButton = $("[data-toggle-inventory]");
+  toggleButton.textContent = state.inventoryOpen ? "Fechar inventário" : "Abrir inventário";
+  toggleButton.setAttribute("aria-expanded", String(state.inventoryOpen));
 }
 
 function renderPeers(peers) {
@@ -98,7 +113,12 @@ function renderPeerGroup(selector, peers, emptyMessage) {
         <strong>${peer.peer_id}</strong>
         <span class="peer-meta">${escapeHtml(peer.urls[0] || "conexao recebida")}</span>
       </div>
-      <span class="status completed">online</span>
+      <div class="peer-actions">
+        <span class="status completed">online</span>
+        <button class="small reject" type="button" data-disconnect-peer="${peer.peer_id}">
+          Desconectar
+        </button>
+      </div>
     </div>
   `).join("");
 }
@@ -181,7 +201,7 @@ function eventMessage(event) {
     peer_connected: event.direction === "incoming"
       ? `${event.peer_id} conectou com voce`
       : `Voce conectou com ${event.peer_id}`,
-    peer_disconnected: `${event.peer_id} desconectou`,
+    peer_disconnected: `${event.peer_id} desconectou: ${event.reason || "motivo não informado"}`,
     search_started: `Buscando ${event.sticker_id} na rede`,
     search_hit: `${event.sticker_id} encontrada em ${event.peer_id}`,
     trade_offer: `Nova proposta recebida de ${event.peer_id}`,
@@ -231,14 +251,6 @@ bindForm("#search-form", "/api/search", "Busca iniciada.", (body) => ({
 bindForm("#neighbor-form", "/api/neighbors", "Vizinho conectado com sucesso.");
 bindForm("#trade-form", "/api/trades", "Proposta enviada.");
 bindForm("#inventory-query-form", "/api/inventory/query", "Consulta enviada.");
-bindForm("#sticker-form", "/api/stickers", "Inventario atualizado.", (body) => ({
-  ...body,
-  quantity: Number(body.quantity)
-}));
-
-$("#sticker-form").addEventListener("submit", () => {
-  setTimeout(() => $("#sticker-dialog").close(), 150);
-});
 
 document.addEventListener("click", async (event) => {
   const clearEventsButton = event.target.closest("[data-clear-events]");
@@ -262,6 +274,27 @@ document.addEventListener("click", async (event) => {
       notice(scope === "trades"
         ? "Trocas encerradas removidas."
         : "Historico de buscas removido.");
+      await refresh();
+    } catch (error) {
+      notice(error.message, true);
+    }
+    return;
+  }
+
+  const inventoryToggle = event.target.closest("[data-toggle-inventory]");
+  if (inventoryToggle) {
+    state.inventoryOpen = !state.inventoryOpen;
+    renderInventory(state.status.inventory);
+    return;
+  }
+
+  const disconnectButton = event.target.closest("[data-disconnect-peer]");
+  if (disconnectButton) {
+    try {
+      await api(`/api/neighbors/${encodeURIComponent(disconnectButton.dataset.disconnectPeer)}`, {
+        method: "DELETE"
+      });
+      notice(`${disconnectButton.dataset.disconnectPeer} desconectado.`);
       await refresh();
     } catch (error) {
       notice(error.message, true);

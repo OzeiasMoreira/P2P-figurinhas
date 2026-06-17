@@ -29,10 +29,78 @@ test("troca atualiza as duas quantidades e impede saldo negativo", (context) => 
   store.applyTrade("FIG-01", "FIG-02", "https://example.test/FIG-02.png");
   assert.equal(store.quantity("FIG-01"), 27);
   assert.equal(store.quantity("FIG-02"), 1);
+  assert.equal(
+    store.inventoryList().find((item) => item.sticker_id === "FIG-02").image_url,
+    "https://example.test/FIG-02.png"
+  );
+
+  store.applyTrade("FIG-01", "FIG-04");
+  assert.equal(
+    store.inventoryList().find((item) => item.sticker_id === "FIG-04").image_url,
+    "https://raw.githubusercontent.com/rgcoelho01/album/main/docs/images/FIG-04.png"
+  );
 
   store.registerSticker("FIG-03", 0);
   assert.throws(() => store.applyTrade("FIG-03", "FIG-02"), /Sem disponibilidade/);
   assert.equal(store.quantity("FIG-03"), 0);
+});
+
+test("preenche URL padrÃ£o para figurinhas antigas sem imagem", (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "p2p-store-images-"));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "state.json");
+  fs.writeFileSync(filePath, JSON.stringify({
+    inventory: {
+      "FIG-07": { quantity: 1, image_url: "" }
+    },
+    processed_queries: [],
+    searches: [],
+    trades: []
+  }), "utf8");
+
+  const store = new Store(filePath, {
+    sticker_id: "FIG-19",
+    image_url: "https://example.test/public/figurinhas/FIG-19.png"
+  });
+
+  assert.equal(
+    store.inventoryList().find((item) => item.sticker_id === "FIG-07").image_url,
+    "https://raw.githubusercontent.com/rgcoelho01/album/main/docs/images/FIG-07.png"
+  );
+});
+
+test("conclui trocas recebidas que ficaram aceitas sem confirmaÃ§Ã£o", (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "p2p-store-accepted-"));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "state.json");
+  fs.writeFileSync(filePath, JSON.stringify({
+    inventory: {
+      "FIG-19": {
+        quantity: 28,
+        image_url: "https://example.test/FIG-19.png"
+      }
+    },
+    processed_queries: [],
+    searches: [],
+    trades: [{
+      trade_id: "accepted-incoming",
+      direction: "incoming",
+      peer_id: "ALUNO-07",
+      offer_sticker_id: "FIG-07",
+      want_sticker_id: "FIG-19",
+      offer_image_url: "https://example.test/FIG-07.png",
+      status: "accepted"
+    }]
+  }), "utf8");
+
+  const store = new Store(filePath, {
+    sticker_id: "FIG-19",
+    image_url: "https://example.test/FIG-19.png"
+  });
+
+  assert.equal(store.quantity("FIG-19"), 27);
+  assert.equal(store.quantity("FIG-07"), 1);
+  assert.equal(store.state.trades[0].status, "completed");
 });
 
 test("registra query_id apenas uma vez", (context) => {

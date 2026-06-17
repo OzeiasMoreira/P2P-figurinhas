@@ -1,26 +1,37 @@
 :root {
-  color-scheme: dark;
-  --background: #090d16;
-  --panel: #111827;
-  --panel-light: #182235;
-  --line: #2a3850;
-  --text: #edf4ff;
-  --muted: #96a6bd;
-  --accent: #55e6a5;
-  --accent-dark: #173f35;
-  --danger: #ff718b;
-  --warning: #ffc857;
+  color-scheme: light;
+  --background: #f7f4ec;
+  --ink: #111111;
+  --panel: #fffdf6;
+  --panel-light: #f1eadb;
+  --line: #d8cfbd;
+  --text: #171717;
+  --muted: #6c665a;
+  --accent: #006b4f;
+  --accent-dark: #003f87;
+  --danger: #d22730;
+  --warning: #c99a2e;
+  --gold: #d7a83a;
+  --red: #d22730;
+  --blue: #005eb8;
+  --green: #00843d;
 }
 
 * {
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
   background:
-    radial-gradient(circle at 15% -10%, #173253 0, transparent 32rem),
+    linear-gradient(120deg, rgb(0 94 184 / 12%) 0 16%, transparent 16% 100%),
+    linear-gradient(300deg, transparent 0 72%, rgb(210 39 48 / 13%) 72% 86%, transparent 86%),
+    linear-gradient(35deg, transparent 0 78%, rgb(0 132 61 / 16%) 78% 92%, transparent 92%),
     var(--background);
   color: var(--text);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -38,7 +49,18 @@ header {
   justify-content: space-between;
   gap: 24px;
   padding: 44px 0 28px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 4px solid var(--ink);
+  position: relative;
+}
+
+header::after {
+  position: absolute;
+  right: 0;
+  bottom: -4px;
+  width: min(430px, 70%);
+  height: 4px;
+  background: linear-gradient(90deg, var(--red), var(--green), var(--blue), var(--gold));
+  content: "";
 }
 
 h1,
@@ -50,7 +72,8 @@ p {
 h1 {
   margin-bottom: 0;
   font-size: clamp(2rem, 5vw, 4rem);
-  letter-spacing: -0.055em;
+  letter-spacing: 0;
+  text-transform: uppercase;
 }
 
 h2 {
@@ -60,7 +83,7 @@ h2 {
 
 .eyebrow {
   margin-bottom: 7px;
-  color: var(--accent);
+  color: var(--danger);
   font-size: .72rem;
   font-weight: 800;
   letter-spacing: .16em;
@@ -74,7 +97,7 @@ h2 {
 }
 
 .identity strong {
-  color: var(--accent);
+  color: var(--accent-dark);
   font-size: 1.15rem;
 }
 
@@ -100,9 +123,10 @@ main {
   align-items: baseline;
   justify-content: space-between;
   padding: 18px 20px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 5px 5px 0 var(--ink);
 }
 
 .summary span {
@@ -111,7 +135,7 @@ main {
 }
 
 .summary strong {
-  color: var(--accent);
+  color: var(--accent-dark);
   font-size: 1.65rem;
 }
 
@@ -119,8 +143,8 @@ main {
   display: none;
   margin-bottom: 18px;
   padding: 12px 16px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
+  border: 2px solid var(--ink);
+  border-radius: 8px;
   background: var(--panel-light);
 }
 
@@ -141,10 +165,10 @@ main {
 
 .panel {
   padding: 24px;
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  background: color-mix(in srgb, var(--panel) 94%, transparent);
-  box-shadow: 0 18px 50px rgb(0 0 0 / 18%);
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 6px 6px 0 var(--ink);
 }
 
 .wide {
@@ -156,6 +180,10 @@ main {
   align-items: start;
   justify-content: space-between;
   gap: 16px;
+}
+
+.panel-title button {
+  flex: 0 0 auto;
 }
 
 form {
@@ -174,40 +202,42 @@ label {
 input,
 button {
   min-height: 43px;
-  border-radius: 9px;
+  border-radius: 6px;
   font: inherit;
 }
 
 input {
   width: 100%;
-  border: 1px solid var(--line);
+  border: 2px solid var(--ink);
   outline: none;
-  background: #0c1320;
+  background: #ffffff;
   color: var(--text);
   padding: 0 12px;
 }
 
 input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgb(85 230 165 / 12%);
+  border-color: var(--accent-dark);
+  box-shadow: 0 0 0 3px rgb(0 94 184 / 14%);
 }
 
 button {
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: #06130e;
+  border: 2px solid var(--ink);
+  background: var(--gold);
+  color: var(--ink);
   padding: 0 16px;
   font-weight: 800;
   cursor: pointer;
+  box-shadow: 3px 3px 0 var(--ink);
 }
 
 button:hover {
-  filter: brightness(1.08);
+  transform: translate(-1px, -1px);
+  filter: saturate(1.08);
 }
 
 button.secondary {
-  background: var(--accent-dark);
-  color: var(--accent);
+  background: var(--ink);
+  color: #ffffff;
 }
 
 button.reject {
@@ -231,24 +261,40 @@ button.small {
   font-size: .78rem;
 }
 
+.inventory-summary {
+  margin: -8px 0 16px;
+  line-height: 1.45;
+}
+
 .stickers {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 14px;
 }
 
 .sticker {
+  display: grid;
+  grid-template-rows: 1fr auto;
   overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: #0b111c;
+  min-height: 208px;
+  border: 2px solid var(--ink);
+  border-radius: 6px;
+  background: #fffaf0;
+  color: var(--text);
+  padding: 0;
+  text-align: left;
+  box-shadow: none;
 }
 
 .sticker-image {
   display: grid;
-  min-height: 140px;
+  min-height: 148px;
   place-items: center;
-  background: linear-gradient(145deg, #142139, #0b111c);
+  border-bottom: 2px solid var(--ink);
+  background:
+    linear-gradient(145deg, rgb(0 94 184 / 14%), transparent 42%),
+    linear-gradient(35deg, transparent 0 55%, rgb(210 39 48 / 15%) 55% 70%, transparent 70%),
+    #ffffff;
 }
 
 .sticker img {
@@ -259,8 +305,8 @@ button.small {
 }
 
 .sticker-image span {
-  color: var(--muted);
-  font-size: 2rem;
+  color: var(--ink);
+  font-size: 2.4rem;
   font-weight: 900;
 }
 
@@ -268,12 +314,40 @@ button.small {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   padding: 11px;
+  border-top: 4px solid var(--gold);
+  background: #fffdf6;
 }
 
 .sticker-info span {
-  color: var(--accent);
+  color: var(--accent-dark);
   font-weight: 800;
+}
+
+.album-page {
+  position: relative;
+  padding: 18px;
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, transparent calc(50% - 1px), rgb(17 17 17 / 24%) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)),
+    repeating-linear-gradient(0deg, rgb(216 207 189 / 38%) 0 1px, transparent 1px 24px),
+    #fff7e8;
+}
+
+.sticker.owned {
+  background: #ffffff;
+}
+
+.sticker.missing {
+  background: #f3ead9;
+}
+
+.sticker.missing .sticker-image {
+  background:
+    repeating-linear-gradient(-45deg, rgb(17 17 17 / 7%) 0 8px, transparent 8px 16px),
+    #fff7e8;
 }
 
 .feed {
@@ -285,9 +359,9 @@ button.small {
 .feed-item,
 .trade {
   padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #0c1320;
+  border: 2px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
 }
 
 .feed-item {
@@ -307,9 +381,9 @@ button.small {
 .connection-groups section {
   min-width: 0;
   padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: #0b111c;
+  border: 2px solid var(--line);
+  border-radius: 8px;
+  background: #fff8ea;
 }
 
 .connection-groups h3 {
@@ -333,6 +407,13 @@ button.small {
   color: var(--muted);
   font-size: .72rem;
   overflow-wrap: anywhere;
+}
+
+.peer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: end;
+  gap: 8px;
 }
 
 #inventory-query-form {
@@ -404,11 +485,11 @@ button.small {
   grid-template-columns: 70px 1fr;
   gap: 10px;
   padding: 9px 0;
-  border-bottom: 1px solid rgb(42 56 80 / 55%);
+  border-bottom: 1px solid rgb(17 17 17 / 16%);
 }
 
 .event-time {
-  color: #6f829d;
+  color: var(--muted);
 }
 
 .event-message {
@@ -440,11 +521,12 @@ button.small {
 
 dialog {
   width: min(460px, calc(100% - 32px));
-  border: 1px solid var(--line);
-  border-radius: 16px;
+  border: 2px solid var(--ink);
+  border-radius: 8px;
   background: var(--panel);
   color: var(--text);
   padding: 24px;
+  box-shadow: 8px 8px 0 var(--ink);
 }
 
 dialog::backdrop {

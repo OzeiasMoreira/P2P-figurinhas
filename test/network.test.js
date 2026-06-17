@@ -7,6 +7,7 @@ const os = require("node:os");
 const path = require("node:path");
 const WebSocket = require("ws");
 const { createApplication } = require("../src/server");
+const { normalizePeerUrl } = require("../src/p2p-node");
 
 function config(directory, number) {
   const suffix = String(number).padStart(2, "0");
@@ -93,7 +94,25 @@ function waitForWireMessage(node, type, predicate = () => true, timeout = 3000) 
   });
 }
 
-test("servidor aceita WebSocket na raiz e em /p2p", async (context) => {
+function waitForPeer(node, peerId, timeout = 5000) {
+  return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    const poll = setInterval(() => {
+      const peer = node.connectedPeers().find((item) => item.peer_id === peerId);
+      if (peer) {
+        clearInterval(poll);
+        resolve(peer);
+        return;
+      }
+      if (Date.now() - startedAt > timeout) {
+        clearInterval(poll);
+        reject(new Error(`Tempo excedido aguardando peer ${peerId}`));
+      }
+    }, 50);
+  });
+}
+
+test("servidor aceita WebSocket na raiz, em /p2p e em /ws", async (context) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "p2p-endpoints-"));
   const app = createApplication(config(directory, 19));
   context.after(async () => {
@@ -111,10 +130,11 @@ test("servidor aceita WebSocket na raiz e em /p2p", async (context) => {
   assert.ok(Array.isArray(hello.peers));
   assert.deepEqual(
     Object.keys(hello).sort(),
-    ["message_id", "peers", "sender_peer_id", "type"]
+    ["message_id", "peer_url", "peers", "sender_peer_id", "type"]
   );
 
   await connectAndHello(`ws://127.0.0.1:${app.config.port}/p2p`, "ALUNO-21");
+  await connectAndHello(`ws://127.0.0.1:${app.config.port}/ws`, "ALUNO-22");
 });
 
 test("conexão manual aguarda o HELLO do vizinho", async (context) => {
@@ -147,6 +167,82 @@ test("conexão manual informa falha em destino indisponível", async (context) =
   await assert.rejects(
     app.node.connectAndWait("ws://127.0.0.1:1", 500),
     /Nao foi possivel|Tempo esgotado/
+  );
+});
+
+test("conexão manual informa quando o endpoint WebSocket responde 404", async (context) => {
+  const server = require("node:http").createServer((_request, response) => {
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "p2p-http-404-"));
+  const app = createApplication(config(directory, 19));
+  context.after(async () => {
+    await app.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  const address = server.address();
+  await assert.rejects(
+    app.node.connectAndWait(`ws://127.0.0.1:${address.port}`, 1000),
+    /HTTP 404.*\/p2p/
+  );
+});
+
+test("descobre e conecta automaticamente nos vizinhos anunciados por HELLO", async (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "p2p-discovery-"));
+  const apps = [1, 2, 3].map((number) => createApplication(config(directory, number)));
+  context.after(async () => {
+    await Promise.allSettled(apps.map((app) => app.close()));
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  await Promise.all(apps.map((app) => app.listen()));
+  const [first, second, third] = apps;
+
+  first.node.connect(second.config.advertised_url);
+  await waitForPeer(first.node, "ALUNO-02");
+
+  second.node.connect(third.config.advertised_url);
+  await waitForPeer(second.node, "ALUNO-03");
+
+  const discovered = await waitForPeer(first.node, "ALUNO-03");
+  assert.equal(discovered.outgoing, true);
+  assert.ok(discovered.urls.includes(normalizePeerUrl(third.config.advertised_url)));
+});
+
+test("desconecta de um aluno e cancela reconexÃ£o automÃ¡tica", async (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "p2p-disconnect-"));
+  const apps = [19, 20, 21, 22].map((number) => createApplication(config(directory, number)));
+  context.after(async () => {
+    await Promise.allSettled(apps.map((app) => app.close()));
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  await Promise.all(apps.map((app) => app.listen()));
+  const [first, second, third, fourth] = apps;
+
+  first.node.connect(second.config.advertised_url);
+  await waitForPeer(first.node, "ALUNO-20");
+  second.node.connect(third.config.advertised_url);
+  await waitForPeer(first.node, "ALUNO-21");
+
+  const result = first.node.disconnectPeer("ALUNO-21");
+  assert.equal(result.peer_id, "ALUNO-21");
+  assert.ok(result.disconnected >= 1);
+  assert.equal(first.node.connectedPeers().some((peer) => peer.peer_id === "ALUNO-21"), false);
+  assert.equal(first.node.knownPeerUrls.has(normalizePeerUrl(third.config.advertised_url)), false);
+
+  second.node.connect(fourth.config.advertised_url);
+  await waitForPeer(first.node, "ALUNO-22");
+  await new Promise((resolve) => setTimeout(resolve, 3500));
+  assert.equal(first.node.connectedPeers().some((peer) => peer.peer_id === "ALUNO-21"), false);
+  assert.equal(first.node.manuallyDisconnectedPeerIds.has("ALUNO-21"), true);
+  assert.equal(
+    first.node.manuallyDisconnectedPeerUrls.has(normalizePeerUrl(third.config.advertised_url)),
+    true
   );
 });
 
@@ -195,6 +291,7 @@ test("três nós encontram figurinha e concluem troca bilateral", async (context
   first.node.startSearch("FIG-03", 7);
   const searchWire = await searchWirePromise;
   assert.equal(searchWire.sender_peer_id, "ALUNO-01");
+  assert.equal(searchWire.origin_peer_ip, "127.0.0.1");
   assert.equal(searchWire.sticker_id, "FIG-03");
   assert.equal(searchWire.ttl, 7);
   assert.match(searchWire.query_id, /^[0-9a-f-]{36}$/i);
@@ -235,6 +332,8 @@ test("três nós encontram figurinha e concluem troca bilateral", async (context
   const confirmWirePromise = waitForWireMessage(third.node, "TRANSFER_CONFIRM");
   third.node.respondToTrade(incoming.trade_id, true);
   const acceptWire = await acceptWirePromise;
+  assert.equal(third.store.quantity("FIG-03"), 27);
+  assert.equal(third.store.quantity("FIG-01"), 1);
   const confirmWire = await confirmWirePromise;
   await Promise.all([firstCompleted, thirdCompleted]);
 
@@ -249,4 +348,78 @@ test("três nós encontram figurinha e concluem troca bilateral", async (context
   assert.equal(first.store.quantity("FIG-03"), 1);
   assert.equal(third.store.quantity("FIG-03"), 27);
   assert.equal(third.store.quantity("FIG-01"), 1);
+});
+
+test("conclui troca quando TRADE_ACCEPT vem sem trade_id", async (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "p2p-accept-compat-"));
+  const first = createApplication(config(directory, 1));
+  const second = createApplication(config(directory, 2));
+  context.after(async () => {
+    await Promise.allSettled([first.close(), second.close()]);
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  await Promise.all([first.listen(), second.listen()]);
+  first.node.connect(second.config.advertised_url);
+  await waitForPeer(first.node, "ALUNO-02");
+  await waitForPeer(second.node, "ALUNO-01");
+
+  const outgoing = first.node.offerTrade("ALUNO-02", "FIG-01", "FIG-02");
+  const completed = waitForEvent(
+    first.node,
+    "trade_updated",
+    (event) => event.trade_id === outgoing.trade_id && event.status === "completed"
+  );
+  const socket = [...second.node.peerSockets.get("ALUNO-01")]
+    .find((candidate) => candidate.readyState === WebSocket.OPEN);
+  socket.send(JSON.stringify({
+    type: "TRADE_ACCEPT",
+    message_id: "550e8400-e29b-41d4-a716-446655440201",
+    origin_peer_id: "ALUNO-02",
+    sender_peer_id: "ALUNO-02",
+    receiver_peer_id: "ALUNO-01",
+    offer_sticker_id: "FIG-01",
+    want_sticker_id: "FIG-02"
+  }));
+
+  await completed;
+  assert.equal(first.store.quantity("FIG-01"), 27);
+  assert.equal(first.store.quantity("FIG-02"), 1);
+});
+
+test("rejeita troca quando TRADE_REJECT vem sem trade_id", async (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "p2p-reject-compat-"));
+  const first = createApplication(config(directory, 1));
+  const second = createApplication(config(directory, 2));
+  context.after(async () => {
+    await Promise.allSettled([first.close(), second.close()]);
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  await Promise.all([first.listen(), second.listen()]);
+  first.node.connect(second.config.advertised_url);
+  await waitForPeer(first.node, "ALUNO-02");
+  await waitForPeer(second.node, "ALUNO-01");
+
+  const outgoing = first.node.offerTrade("ALUNO-02", "FIG-01", "FIG-02");
+  const rejected = waitForEvent(
+    first.node,
+    "trade_updated",
+    (event) => event.trade_id === outgoing.trade_id && event.status === "rejected"
+  );
+  const socket = [...second.node.peerSockets.get("ALUNO-01")]
+    .find((candidate) => candidate.readyState === WebSocket.OPEN);
+  socket.send(JSON.stringify({
+    type: "TRADE_REJECT",
+    message_id: "550e8400-e29b-41d4-a716-446655440202",
+    origin_peer_id: "ALUNO-02",
+    sender_peer_id: "ALUNO-02",
+    receiver_peer_id: "ALUNO-01",
+    offer_sticker_id: "FIG-01",
+    want_sticker_id: "FIG-02"
+  }));
+
+  await rejected;
+  assert.equal(first.store.quantity("FIG-01"), 28);
+  assert.equal(first.store.quantity("FIG-02"), 0);
 });

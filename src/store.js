@@ -5,12 +5,16 @@ const path = require("node:path");
 const { normalizeStickerId } = require("./protocol");
 
 const MAX_HISTORY = 2000;
+const DEFAULT_IMAGE_BASE_URL =
+  "https://raw.githubusercontent.com/rgcoelho01/album/main/docs/images";
 
 class Store {
   constructor(filePath, initial) {
     this.filePath = filePath;
     this.initial = initial;
     this.state = this.#load();
+    this.#fillMissingImageUrls();
+    this.completeAcceptedIncomingTrades();
     this.save();
   }
 
@@ -98,7 +102,7 @@ class Store {
     const current = this.state.inventory[normalized];
     this.state.inventory[normalized] = {
       quantity,
-      image_url: imageUrl || current?.image_url || ""
+      image_url: imageUrl || current?.image_url || this.#imageUrlFor(normalized)
     };
     this.save();
     return this.state.inventory[normalized];
@@ -112,12 +116,69 @@ class Store {
     }
     this.state.inventory[sent].quantity -= 1;
     if (!this.state.inventory[received]) {
-      this.state.inventory[received] = { quantity: 0, image_url: receivedImageUrl };
+      this.state.inventory[received] = {
+        quantity: 0,
+        image_url: receivedImageUrl || this.#imageUrlFor(received)
+      };
     } else if (receivedImageUrl && !this.state.inventory[received].image_url) {
       this.state.inventory[received].image_url = receivedImageUrl;
+    } else if (!this.state.inventory[received].image_url) {
+      this.state.inventory[received].image_url = this.#imageUrlFor(received);
     }
     this.state.inventory[received].quantity += 1;
     this.save();
+  }
+
+  completeAcceptedIncomingTrades() {
+    let changed = false;
+    for (const trade of this.state.trades) {
+      if (trade.direction !== "incoming" || trade.status !== "accepted") {
+        continue;
+      }
+
+      const sent = normalizeStickerId(trade.want_sticker_id);
+      const received = normalizeStickerId(trade.offer_sticker_id);
+      if (this.quantity(sent) < 1) {
+        trade.status = "failed";
+        trade.updated_at = new Date().toISOString();
+        changed = true;
+        continue;
+      }
+
+      this.state.inventory[sent].quantity -= 1;
+      if (!this.state.inventory[received]) {
+        this.state.inventory[received] = {
+          quantity: 0,
+          image_url: trade.offer_image_url || this.#imageUrlFor(received)
+        };
+      } else if (trade.offer_image_url && !this.state.inventory[received].image_url) {
+        this.state.inventory[received].image_url = trade.offer_image_url;
+      } else if (!this.state.inventory[received].image_url) {
+        this.state.inventory[received].image_url = this.#imageUrlFor(received);
+      }
+      this.state.inventory[received].quantity += 1;
+      trade.status = "completed";
+      trade.updated_at = new Date().toISOString();
+      changed = true;
+    }
+    return changed;
+  }
+
+  #fillMissingImageUrls() {
+    for (const [stickerId, item] of Object.entries(this.state.inventory)) {
+      if (!item.image_url || this.#isGeneratedStickerImageUrl(item.image_url)) {
+        item.image_url = this.#imageUrlFor(stickerId);
+      }
+    }
+  }
+
+  #imageUrlFor(stickerId) {
+    const normalized = normalizeStickerId(stickerId);
+    return `${DEFAULT_IMAGE_BASE_URL}/${normalized}.png`;
+  }
+
+  #isGeneratedStickerImageUrl(imageUrl) {
+    return /\/figurinhas\/FIG-?\d{1,2}\.png(?:$|[?#])/i.test(String(imageUrl || ""));
   }
 
   hasProcessedQuery(queryId) {

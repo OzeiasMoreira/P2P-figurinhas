@@ -25,6 +25,7 @@ function createApplication(config) {
   const wsServer = new WebSocketServer({ noServer: true });
 
   node.on("event", (event) => {
+    logEvent(config.peer_id, event);
     const payload = `data: ${JSON.stringify(event)}\n\n`;
     for (const response of eventClients) {
       response.write(payload);
@@ -46,7 +47,7 @@ function createApplication(config) {
 
   server.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
-    if (url.pathname !== "/" && url.pathname !== "/p2p") {
+    if (!["/", "/p2p", "/ws"].includes(url.pathname)) {
       socket.destroy();
       return;
     }
@@ -148,6 +149,13 @@ async function handleApi(request, response, url, context) {
     return;
   }
 
+  const neighborMatch = url.pathname.match(/^\/api\/neighbors\/([^/]+)$/);
+  if (request.method === "DELETE" && neighborMatch) {
+    const result = node.disconnectPeer(decodeURIComponent(neighborMatch[1]));
+    sendJson(response, 200, result);
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/trades") {
     const body = await readJson(request);
     const trade = node.offerTrade(
@@ -246,7 +254,58 @@ function websocketEndpoints(advertisedUrl) {
   root.pathname = "/";
   const p2p = new URL(parsed);
   p2p.pathname = "/p2p";
-  return [...new Set([root.toString(), p2p.toString()])];
+  const ws = new URL(parsed);
+  ws.pathname = "/ws";
+  return [...new Set([root.toString(), p2p.toString(), ws.toString()])];
+}
+
+function logEvent(localPeerId, event) {
+  const message = eventLogMessage(event);
+  if (!message) {
+    return;
+  }
+  const timestamp = new Date(event.timestamp || Date.now()).toLocaleTimeString("pt-BR");
+  const level = ["connection_error", "protocol_error"].includes(event.type) ||
+    event.status === "failed"
+    ? "ERRO"
+    : "INFO";
+  console.log(`[${timestamp}] [${level}] [${localPeerId}] ${message}`);
+}
+
+function eventLogMessage(event) {
+  switch (event.type) {
+    case "peer_connected":
+      return `${event.direction === "incoming" ? "Recebeu conexao de" : "Conectou com"} ${event.peer_id}` +
+        `${event.peer_url ? ` (${event.peer_url})` : ""}`;
+    case "peer_disconnected":
+      return `Desconectou de ${event.peer_id}: ${event.reason || "motivo nao informado"}`;
+    case "search_started":
+      return `Busca iniciada por ${event.sticker_id} com ttl=${event.ttl}`;
+    case "search_hit":
+      return `${event.sticker_id} encontrada em ${event.peer_id}` +
+        `${event.peer_url ? ` (${event.peer_url})` : ""}`;
+    case "search_miss":
+      return `${event.sticker_id} nao encontrada em ${event.peer_id}`;
+    case "trade_offer":
+      return `Proposta recebida de ${event.peer_id}: oferece ${event.offer_sticker_id} por ${event.want_sticker_id}`;
+    case "trade_updated":
+      return `Troca com ${event.peer_id} mudou para ${event.status}` +
+        `${event.offer_sticker_id && event.want_sticker_id
+          ? ` (${event.offer_sticker_id} por ${event.want_sticker_id})`
+          : ""}`;
+    case "inventory_updated":
+      return "Inventario atualizado";
+    case "inventory_response":
+      return `Inventario recebido de ${event.peer_id}`;
+    case "connection_error":
+      return `Erro de conexao${event.peer_url ? ` em ${event.peer_url}` : ""}: ${event.message || event.code || "sem detalhe"}`;
+    case "protocol_error":
+      return `Erro de protocolo${event.protocol_type ? ` (${event.protocol_type})` : ""}: ${event.message || "sem detalhe"}`;
+    case "history_cleared":
+      return `Historico limpo: ${(event.scopes || []).join(", ") || "sem escopo"}`;
+    default:
+      return "";
+  }
 }
 
 if (require.main === module) {

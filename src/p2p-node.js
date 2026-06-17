@@ -25,7 +25,12 @@ class P2PNode extends EventEmitter {
         this.queryRoutes = new Map();
         this.inventorySnapshots = new Map();
         this.processedMessages = new Set();
-        this.knownPeerUrls = new Set(config.neighbors || []);
+        this.manuallyDisconnectedPeerIds = new Set();
+        this.manuallyDisconnectedPeerUrls = new Set();
+        this.knownPeerUrls = new Set();
+        for (const url of config.neighbors || []) {
+            this.#rememberPeerUrl(url);
+        }
         this.reconnectTimers = new Map();
         this.stopped = false;
     }
@@ -55,9 +60,11 @@ class P2PNode extends EventEmitter {
 
         socket.p2p = {
             peerId: null,
+            peerUrl: null,
             outboundUrl,
             connectionSource,
             helloSent: false,
+            canceling: false,
             connectedAt: new Date().toISOString()
         };
         this.sockets.add(socket);
@@ -73,12 +80,27 @@ class P2PNode extends EventEmitter {
             }
             this.#handleRaw(socket, data.toString("utf8"));
         });
-        socket.on("close", () => this.#detach(socket));
+        socket.on("close", (code, reason) => {
+            this.#detach(socket, code, reason.toString("utf8"));
+        });
         socket.on("error", (error) => {
+            if (socket.p2p.canceling) {
+                return;
+            }
             this.#emit("connection_error", {
                 peer_url: outboundUrl,
                 message: error.message
             });
+        });
+        socket.on("unexpected-response", (_request, response) => {
+            response.resume();
+            const suffix = new URL(outboundUrl).pathname === "/p2p"
+                ? ""
+                : " Tente adicionar /p2p ao endereço.";
+            socket.emit(
+                "p2p_connection_failure",
+                new Error(`Servidor respondeu HTTP ${response.statusCode}.${suffix}`)
+            );
         });
 
         if (socket.readyState === OPEN) {
@@ -99,7 +121,14 @@ class P2PNode extends EventEmitter {
             return false;
         }
 
-        this.knownPeerUrls.add(url);
+        const manualConnection = ["manual", "configured"].includes(connectionSource);
+        if (manualConnection) {
+            this.manuallyDisconnectedPeerUrls.delete(url);
+        } else if (this.manuallyDisconnectedPeerUrls.has(url)) {
+            return false;
+        }
+
+        this.#rememberPeerUrl(url, manualConnection);
         const existing = this.outboundSockets.get(url);
         if (existing && [OPEN, CONNECTING].includes(existing.readyState)) {
             return true;
@@ -132,6 +161,7 @@ class P2PNode extends EventEmitter {
                 clearInterval(poll);
                 socket?.off("error", onError);
                 socket?.off("close", onClose);
+                socket?.off("p2p_connection_failure", onFailure);
                 if (error) {
                     this.#cancelOutboundConnection(url, socket);
                     reject(error);
@@ -145,6 +175,7 @@ class P2PNode extends EventEmitter {
             const onClose = () => finish(
                 new Error(`A conexao com ${url} foi encerrada antes do HELLO`)
             );
+            const onFailure = (error) => finish(error);
             const poll = setInterval(() => {
                 if (socket?.readyState === OPEN && socket.p2p?.peerId) {
                     finish();
@@ -156,6 +187,7 @@ class P2PNode extends EventEmitter {
 
             socket?.once("error", onError);
             socket?.once("close", onClose);
+            socket?.once("p2p_connection_failure", onFailure);
         });
     }
 
@@ -165,9 +197,7 @@ class P2PNode extends EventEmitter {
                 const openSockets = [...sockets].filter(
                     (socket) => socket.readyState === OPEN
                 );
-                const outgoing = openSockets.some((socket) =>
-                    ["manual", "configured"].includes(socket.p2p.connectionSource)
-                );
+                const outgoing = openSockets.some((socket) => socket.p2p.outboundUrl);
                 return {
                     peer_id,
                     connections: openSockets.length,
@@ -179,13 +209,37 @@ class P2PNode extends EventEmitter {
                         .map((socket) => socket.p2p.connectedAt)
                         .sort()[0] || null,
                     urls: openSockets
-                        .filter((socket) => socket.p2p.connectionSource !== "discovered")
                         .map((socket) => socket.p2p.outboundUrl)
                         .filter(Boolean)
                 };
             })
             .filter((peer) => peer.connections > 0)
             .sort((a, b) => a.peer_id.localeCompare(b.peer_id));
+    }
+
+    disconnectPeer(peerId) {
+        const normalized = normalizePeerId(peerId);
+        this.manuallyDisconnectedPeerIds.add(normalized);
+        const sockets = [...(this.peerSockets.get(normalized) || [])];
+        for (const socket of sockets) {
+            socket.p2p.canceling = true;
+            if (socket.p2p.outboundUrl) {
+                this.#forgetPeerUrl(socket.p2p.outboundUrl, true);
+            }
+            if (socket.p2p.peerUrl) {
+                this.#forgetPeerUrl(socket.p2p.peerUrl, true);
+            }
+            if ([OPEN, CONNECTING].includes(socket.readyState)) {
+                socket.close(1000, "desconectado pelo usuario");
+            }
+        }
+        this.peerSockets.delete(normalized);
+        this.#emit("peer_disconnected", {
+            peer_id: normalized,
+            reason: "desconectado pelo usuario"
+        });
+        this.#broadcastHello();
+        return { peer_id: normalized, disconnected: sockets.length };
     }
 
     startSearch(stickerId, ttl = 7) {
@@ -220,7 +274,7 @@ class P2PNode extends EventEmitter {
             }
             this.#send(socket, createMessage("SEARCH", {
                 origin_peer_id: this.config.peer_id,
-                origin_peer_ip: this.config.advertised_url,
+                origin_peer_ip: originPeerAddress(this.config.advertised_url),
                 sender_peer_id: this.config.peer_id,
                 receiver_peer_id: socket.p2p.peerId,
                 query_id: queryId,
@@ -307,7 +361,17 @@ class P2PNode extends EventEmitter {
             throw new Error(`O peer ${trade.peer_id} não está conectado`);
         }
 
-        this.#emit("trade_updated", {...trade, status });
+        if (accept) {
+            this.store.applyTrade(
+                trade.want_sticker_id,
+                trade.offer_sticker_id,
+                trade.offer_image_url || ""
+            );
+            this.store.updateTrade(tradeId, { status: "completed" }, "incoming");
+            this.#emit("inventory_updated", { inventory: this.store.inventoryList() });
+        }
+
+        this.#emit("trade_updated", this.store.findTrade(tradeId, "incoming"));
         return this.store.findTrade(tradeId, "incoming");
     }
 
@@ -349,7 +413,7 @@ class P2PNode extends EventEmitter {
             this.#handleMessage(socket, message);
         } catch (error) {
             this.#emit("protocol_error", {
-                type: message.type,
+                protocol_type: message.type,
                 message: error.message
             });
         }
@@ -397,14 +461,51 @@ class P2PNode extends EventEmitter {
     }
 
     #handleHello(socket, message) {
+        const previousPeerId = socket.p2p.peerId;
+        const manualConnection = ["manual", "configured"].includes(socket.p2p.connectionSource);
+        if (manualConnection) {
+            this.manuallyDisconnectedPeerIds.delete(message.sender_peer_id);
+        } else if (this.manuallyDisconnectedPeerIds.has(message.sender_peer_id)) {
+            socket.p2p.canceling = true;
+            if (message.peer_url) {
+                this.#forgetPeerUrl(message.peer_url, true);
+            }
+            socket.close(1000, "peer desconectado manualmente");
+            return;
+        }
+
         socket.p2p.peerId = message.sender_peer_id;
         if (!this.peerSockets.has(message.sender_peer_id)) {
             this.peerSockets.set(message.sender_peer_id, new Set());
         }
         this.peerSockets.get(message.sender_peer_id).add(socket);
 
+        let discoveredNewUrl = false;
+        let senderPeerUrl = "";
+        if (message.peer_url) {
+            try {
+                senderPeerUrl = normalizePeerUrl(message.peer_url);
+                socket.p2p.peerUrl = senderPeerUrl;
+                discoveredNewUrl = this.#rememberPeerUrl(message.peer_url) || discoveredNewUrl;
+            } catch {
+                senderPeerUrl = "";
+            }
+        }
         for (const peerUrl of message.peers || []) {
-            if (typeof peerUrl === "string" && peerUrl !== this.config.advertised_url) {
+            if (typeof peerUrl !== "string") {
+                continue;
+            }
+            let normalizedPeerUrl;
+            try {
+                normalizedPeerUrl = normalizePeerUrl(peerUrl);
+            } catch {
+                continue;
+            }
+            const isSenderUrl = senderPeerUrl && normalizedPeerUrl === senderPeerUrl;
+            if (this.#rememberPeerUrl(peerUrl)) {
+                discoveredNewUrl = true;
+            }
+            if (!isSenderUrl) {
                 this.connect(peerUrl, "discovered");
             }
         }
@@ -423,14 +524,19 @@ class P2PNode extends EventEmitter {
         if (!socket.p2p.helloSent) {
             this.#sendHello(socket);
         }
-        const initiatedLocally = ["manual", "configured"].includes(
-            socket.p2p.connectionSource
-        );
-        this.#emit("peer_connected", {
-            peer_id: message.sender_peer_id,
-            direction: initiatedLocally ? "outgoing" : "incoming",
-            peer_url: socket.p2p.outboundUrl || null
-        });
+        if (discoveredNewUrl || previousPeerId !== message.sender_peer_id) {
+            this.#broadcastHello(socket);
+        }
+        if (previousPeerId !== message.sender_peer_id) {
+            const initiatedLocally = ["manual", "configured"].includes(
+                socket.p2p.connectionSource
+            );
+            this.#emit("peer_connected", {
+                peer_id: message.sender_peer_id,
+                direction: initiatedLocally ? "outgoing" : "incoming",
+                peer_url: socket.p2p.outboundUrl || null
+            });
+        }
     }
 
     #handleSearch(socket, message) {
@@ -543,13 +649,12 @@ class P2PNode extends EventEmitter {
         if (message.receiver_peer_id !== this.config.peer_id) {
             return;
         }
-        const tradeId = message.trade_id || message.message_id;
-        const trade = this.store.findTrade(tradeId, "outgoing");
+        const trade = this.#findOutgoingTradeForResponse(message);
         if (!trade || trade.status !== "pending" || trade.peer_id !== message.sender_peer_id) {
             return;
         }
         if (this.store.quantity(trade.offer_sticker_id) < 1) {
-            this.store.updateTrade(tradeId, { status: "failed" }, "outgoing");
+            this.store.updateTrade(trade.trade_id, { status: "failed" }, "outgoing");
             throw new Error(`Sem disponibilidade de ${trade.offer_sticker_id}`);
         }
 
@@ -558,10 +663,10 @@ class P2PNode extends EventEmitter {
             trade.want_sticker_id,
             message.offer_image_url || message.want_image_url || ""
         );
-        this.store.updateTrade(tradeId, { status: "completed" }, "outgoing");
+        this.store.updateTrade(trade.trade_id, { status: "completed" }, "outgoing");
 
         const confirmation = createMessage("TRANSFER_CONFIRM", {
-            trade_id: tradeId,
+            trade_id: trade.trade_id,
             origin_peer_id: this.config.peer_id,
             sender_peer_id: this.config.peer_id,
             receiver_peer_id: trade.peer_id,
@@ -571,7 +676,7 @@ class P2PNode extends EventEmitter {
             want_image_url: this.#imageUrl(trade.want_sticker_id)
         });
         this.#sendToPeer(trade.peer_id, confirmation);
-        this.#emit("trade_updated", this.store.findTrade(tradeId, "outgoing"));
+        this.#emit("trade_updated", this.store.findTrade(trade.trade_id, "outgoing"));
         this.#emit("inventory_updated", { inventory: this.store.inventoryList() });
     }
 
@@ -579,13 +684,12 @@ class P2PNode extends EventEmitter {
         if (message.receiver_peer_id !== this.config.peer_id) {
             return;
         }
-        const tradeId = message.trade_id || message.message_id;
-        const trade = this.store.findTrade(tradeId, "outgoing");
+        const trade = this.#findOutgoingTradeForResponse(message);
         if (!trade || trade.status !== "pending") {
             return;
         }
-        this.store.updateTrade(tradeId, { status: "rejected" }, "outgoing");
-        this.#emit("trade_updated", this.store.findTrade(tradeId, "outgoing"));
+        this.store.updateTrade(trade.trade_id, { status: "rejected" }, "outgoing");
+        this.#emit("trade_updated", this.store.findTrade(trade.trade_id, "outgoing"));
     }
 
     #handleTransferConfirm(message) {
@@ -635,19 +739,54 @@ class P2PNode extends EventEmitter {
         });
     }
 
-    #sendHello(socket) {
-        if (socket.readyState !== OPEN || socket.p2p.helloSent) {
-            return;
+    #findOutgoingTradeForResponse(message) {
+        const tradeId = message.trade_id || message.message_id;
+        const byId = this.store.findTrade(tradeId, "outgoing");
+        if (byId) {
+            return byId;
         }
-        const peers = [...this.knownPeerUrls];
-        if (this.config.advertised_url) {
-            peers.unshift(this.config.advertised_url);
+
+        return this.store.state.trades.find((trade) => {
+            if (trade.direction !== "outgoing" || trade.status !== "pending") {
+                return false;
+            }
+            if (![message.sender_peer_id, message.origin_peer_id].includes(trade.peer_id)) {
+                return false;
+            }
+            const sameDirection = message.offer_sticker_id === trade.offer_sticker_id &&
+                message.want_sticker_id === trade.want_sticker_id;
+            const invertedDirection = message.offer_sticker_id === trade.want_sticker_id &&
+                message.want_sticker_id === trade.offer_sticker_id;
+            return sameDirection || invertedDirection;
+        });
+    }
+
+    #sendHello(socket, force = false) {
+        if (socket.readyState !== OPEN || (!force && socket.p2p.helloSent)) {
+            return;
         }
         this.#send(socket, createMessage("HELLO", {
             sender_peer_id: this.config.peer_id,
-            peers: [...new Set(peers)]
+            peer_url: this.config.advertised_url,
+            peers: this.#peerUrlsForHello()
         }));
         socket.p2p.helloSent = true;
+    }
+
+    #broadcastHello(exceptSocket = null) {
+        for (const socket of this.#openSockets()) {
+            if (socket !== exceptSocket && socket.p2p.peerId) {
+                this.#sendHello(socket, true);
+            }
+        }
+    }
+
+    #peerUrlsForHello() {
+        const peers = [...this.knownPeerUrls];
+        if (this.config.advertised_url) {
+            peers.unshift(normalizePeerUrl(this.config.advertised_url));
+        }
+        return [...new Set(peers)];
     }
 
     #sendToPeer(peerId, message) {
@@ -671,36 +810,98 @@ class P2PNode extends EventEmitter {
         return [...this.sockets].filter((socket) => socket.readyState === OPEN);
     }
 
+    #rememberPeerUrl(rawUrl, allowBlocked = false) {
+        let url;
+        try {
+            url = normalizePeerUrl(rawUrl);
+        } catch {
+            return false;
+        }
+        if (url === normalizePeerUrl(this.config.advertised_url)) {
+            return false;
+        }
+        if (this.manuallyDisconnectedPeerUrls.has(url) && !allowBlocked) {
+            return false;
+        }
+        if (allowBlocked) {
+            this.manuallyDisconnectedPeerUrls.delete(url);
+        }
+        const previousSize = this.knownPeerUrls.size;
+        this.knownPeerUrls.add(url);
+        return this.knownPeerUrls.size > previousSize;
+    }
+
+    #forgetPeerUrl(rawUrl, block = false) {
+        let url;
+        try {
+            url = normalizePeerUrl(rawUrl);
+        } catch {
+            return false;
+        }
+        this.knownPeerUrls.delete(url);
+        if (block) {
+            this.manuallyDisconnectedPeerUrls.add(url);
+        }
+        const timer = this.reconnectTimers.get(url);
+        if (timer) {
+            clearTimeout(timer);
+            this.reconnectTimers.delete(url);
+        }
+        const socket = this.outboundSockets.get(url);
+        if (socket) {
+            socket.p2p.canceling = true;
+            this.outboundSockets.delete(url);
+        }
+        return true;
+    }
+
     #imageUrl(stickerId) {
         return this.store.state.inventory[stickerId]?.image_url || "";
     }
 
-    #detach(socket) {
+    #detach(socket, code = 1006, reason = "") {
+        const peerId = socket.p2p?.peerId;
+        const peerUrl = socket.p2p?.outboundUrl;
         this.sockets.delete(socket);
-        if (socket.p2p?.outboundUrl &&
-            this.outboundSockets.get(socket.p2p.outboundUrl) === socket) {
-            this.outboundSockets.delete(socket.p2p.outboundUrl);
+        if (peerUrl && this.outboundSockets.get(peerUrl) === socket) {
+            this.outboundSockets.delete(peerUrl);
             this.#scheduleReconnect(
-                socket.p2p.outboundUrl,
+                peerUrl,
                 socket.p2p.connectionSource
             );
         }
-        if (socket.p2p?.peerId) {
-            const peers = this.peerSockets.get(socket.p2p.peerId);
+        if (peerId) {
+            const peers = this.peerSockets.get(peerId);
             peers?.delete(socket);
             if (peers?.size === 0) {
-                this.peerSockets.delete(socket.p2p.peerId);
-                this.#emit("peer_disconnected", { peer_id: socket.p2p.peerId });
+                this.peerSockets.delete(peerId);
+                this.#emit("peer_disconnected", {
+                    peer_id: peerId,
+                    peer_url: peerUrl,
+                    code,
+                    reason: reason || websocketCloseReason(code)
+                });
             }
+        } else if (!this.stopped && !socket.p2p?.canceling && code !== 1000) {
+            this.#emit("connection_error", {
+                peer_url: peerUrl,
+                code,
+                message: `WebSocket encerrado antes do HELLO: ${reason || websocketCloseReason(code)}`
+            });
         }
     }
 
     #scheduleReconnect(url, connectionSource = "manual") {
-        if (this.stopped || !this.knownPeerUrls.has(url) || this.reconnectTimers.has(url)) {
+        if (this.stopped || !this.knownPeerUrls.has(url) ||
+            this.manuallyDisconnectedPeerUrls.has(url) ||
+            this.reconnectTimers.has(url)) {
             return;
         }
         const timer = setTimeout(() => {
             this.reconnectTimers.delete(url);
+            if (!this.knownPeerUrls.has(url) || this.manuallyDisconnectedPeerUrls.has(url)) {
+                return;
+            }
             this.connect(url, connectionSource);
         }, 3000);
         timer.unref();
@@ -718,6 +919,7 @@ class P2PNode extends EventEmitter {
             this.outboundSockets.delete(url);
         }
         if (socket) {
+            socket.p2p.canceling = true;
             socket.p2p.outboundUrl = null;
             if ([OPEN, CONNECTING].includes(socket.readyState)) {
                 socket.terminate();
@@ -753,4 +955,26 @@ function normalizePeerUrl(rawUrl) {
   return parsed.toString();
 }
 
-module.exports = { P2PNode, normalizePeerUrl };
+function originPeerAddress(advertisedUrl) {
+    try {
+        return new URL(advertisedUrl).hostname;
+    } catch {
+        return String(advertisedUrl || "");
+    }
+}
+
+function websocketCloseReason(code) {
+    const reasons = {
+        1000: "encerramento normal",
+        1001: "o servidor remoto foi encerrado",
+        1002: "erro de protocolo",
+        1003: "tipo de mensagem não suportado",
+        1006: "conexão perdida sem confirmação do servidor remoto",
+        1008: "mensagem rejeitada pelo servidor remoto",
+        1011: "erro interno no servidor remoto",
+        1012: "servidor remoto reiniciado"
+    };
+    return reasons[code] || `código WebSocket ${code}`;
+}
+
+module.exports = { P2PNode, normalizePeerUrl, originPeerAddress };
