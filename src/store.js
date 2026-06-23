@@ -5,6 +5,7 @@ const path = require("node:path");
 const { normalizeStickerId } = require("./protocol");
 
 const MAX_HISTORY = 2000;
+const TRADE_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_IMAGE_BASE_URL =
   "https://raw.githubusercontent.com/rgcoelho01/album/main/docs/images";
 
@@ -15,6 +16,7 @@ class Store {
     this.state = this.#load();
     this.#fillMissingImageUrls();
     this.completeAcceptedIncomingTrades();
+    this.expirePendingTrades();
     this.save();
   }
 
@@ -91,6 +93,7 @@ class Store {
   }
 
   availableQuantity(stickerId) {
+    this.expirePendingTrades();
     return this.quantity(stickerId) - this.reservedQuantity(stickerId);
   }
 
@@ -164,6 +167,39 @@ class Store {
     return changed;
   }
 
+  expirePendingTrades(now = new Date()) {
+    const currentTime = now instanceof Date ? now.getTime() : new Date(now).getTime();
+    const expired = [];
+    for (const trade of this.state.trades) {
+      if (trade.status !== "pending") {
+        continue;
+      }
+      const reference = trade.expires_at || trade.created_at || trade.updated_at;
+      if (!reference) {
+        trade.created_at = new Date(currentTime).toISOString();
+        trade.expires_at = new Date(currentTime + TRADE_TIMEOUT_MS).toISOString();
+        continue;
+      }
+      const expiresAt = trade.expires_at
+        ? new Date(trade.expires_at).getTime()
+        : new Date(reference).getTime() + TRADE_TIMEOUT_MS;
+      if (currentTime < expiresAt) {
+        if (!trade.expires_at) {
+          trade.expires_at = new Date(expiresAt).toISOString();
+        }
+        continue;
+      }
+      trade.status = "expired";
+      trade.updated_at = new Date(currentTime).toISOString();
+      trade.expires_at = new Date(expiresAt).toISOString();
+      expired.push({ ...trade });
+    }
+    if (expired.length) {
+      this.save();
+    }
+    return expired;
+  }
+
   #fillMissingImageUrls() {
     for (const [stickerId, item] of Object.entries(this.state.inventory)) {
       if (!item.image_url || this.#isGeneratedStickerImageUrl(item.image_url)) {
@@ -200,10 +236,19 @@ class Store {
   }
 
   addTrade(trade) {
-    this.state.trades.push({ ...trade, updated_at: new Date().toISOString() });
+    const now = new Date();
+    const stored = {
+      ...trade,
+      created_at: trade.created_at || now.toISOString(),
+      updated_at: now.toISOString()
+    };
+    if (stored.status === "pending" && !stored.expires_at) {
+      stored.expires_at = new Date(now.getTime() + TRADE_TIMEOUT_MS).toISOString();
+    }
+    this.state.trades.push(stored);
     this.state.trades = this.state.trades.slice(-MAX_HISTORY);
     this.save();
-    return trade;
+    return stored;
   }
 
   findTrade(tradeId, direction) {
@@ -245,4 +290,4 @@ class Store {
   }
 }
 
-module.exports = { Store };
+module.exports = { Store, TRADE_TIMEOUT_MS };

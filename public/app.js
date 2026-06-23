@@ -3,6 +3,7 @@
 const state = {
   status: null,
   searchResults: [],
+  searchTrace: [],
   events: [],
   inventoryOpen: false
 };
@@ -134,11 +135,12 @@ function renderTrades(trades) {
   container.className = "trade-list";
   container.innerHTML = trades.map((trade) => {
     const incomingPending = trade.direction === "incoming" && trade.status === "pending";
+    const summary = tradeSummary(trade);
     return `
       <article class="trade">
         <div>
           <p><strong>${trade.peer_id}</strong> - ${trade.direction === "incoming" ? "recebida" : "enviada"}</p>
-          <span class="muted">Oferece ${trade.offer_sticker_id} por ${trade.want_sticker_id}</span>
+          <span class="muted">${summary}</span>
         </div>
         <div class="trade-actions">
           ${incomingPending ? `
@@ -151,14 +153,33 @@ function renderTrades(trades) {
   }).join("");
 }
 
+function tradeSummary(trade) {
+  if (trade.direction === "incoming") {
+    return `Voce recebe ${trade.offer_sticker_id} e envia ${trade.want_sticker_id}`;
+  }
+  return `Voce envia ${trade.offer_sticker_id} e recebe ${trade.want_sticker_id}`;
+}
+
 function renderSearchResults() {
   const container = $("#search-results");
-  if (!state.searchResults.length) {
+  if (!state.searchResults.length && !state.searchTrace.length) {
     container.innerHTML = '<p class="empty">Os resultados aparecerao aqui.</p>';
     return;
   }
 
-  container.innerHTML = state.searchResults.map((result) => `
+  const trace = state.searchTrace.map((event) => `
+    <div class="feed-item search-step">
+      <div>
+        <strong>${escapeHtml(searchTraceTitle(event))}</strong>
+        <div class="muted">${escapeHtml(searchTraceDetail(event))}</div>
+      </div>
+      <span class="status ${event.type === "search_stopped" ? "failed" : "pending"}">
+        ttl ${event.ttl}
+      </span>
+    </div>
+  `).join("");
+
+  const results = state.searchResults.map((result) => `
     <div class="feed-item">
       <div>
         <strong>${result.sticker_id}</strong>
@@ -167,6 +188,34 @@ function renderSearchResults() {
       <span class="status completed">encontrada</span>
     </div>
   `).join("");
+
+  container.innerHTML = trace + results;
+}
+
+function searchTraceTitle(event) {
+  if (event.type === "search_started") {
+    return `Buscando ${event.sticker_id}`;
+  }
+  if (event.type === "search_forwarded") {
+    return `${event.sticker_id} repassada`;
+  }
+  if (event.type === "search_stopped") {
+    return `${event.sticker_id} parada`;
+  }
+  return event.sticker_id || "Busca";
+}
+
+function searchTraceDetail(event) {
+  if (event.type === "search_started") {
+    return `Busca iniciada com TTL ${event.ttl}.`;
+  }
+  if (event.type === "search_forwarded") {
+    return `${event.from_peer_id} -> ${event.to_peer_id}, TTL ${event.previous_ttl} -> ${event.ttl}.`;
+  }
+  if (event.type === "search_stopped") {
+    return `TTL chegou em ${event.ttl}; este nó nao repassou mais.`;
+  }
+  return "";
 }
 
 function addEvent(event) {
@@ -202,9 +251,13 @@ function eventMessage(event) {
       ? `${event.peer_id} conectou com voce`
       : `Voce conectou com ${event.peer_id}`,
     peer_disconnected: `${event.peer_id} desconectou: ${event.reason || "motivo não informado"}`,
+    peer_url_ignored: `URL ignorada de ${event.peer_id}: ${event.peer_url}`,
+    self_connection_ignored: `Conexao comigo mesmo ignorada: ${event.peer_url || event.peer_id}`,
     search_started: `Buscando ${event.sticker_id} na rede`,
+    search_forwarded: `${event.sticker_id} repassada para ${event.to_peer_id}: ttl ${event.previous_ttl} -> ${event.ttl}`,
+    search_stopped: `${event.sticker_id} parou porque o ttl chegou em ${event.ttl}`,
     search_hit: `${event.sticker_id} encontrada em ${event.peer_id}`,
-    trade_offer: `Nova proposta recebida de ${event.peer_id}`,
+    trade_offer: `Nova proposta de ${event.peer_id}: voce recebe ${event.offer_sticker_id} e envia ${event.want_sticker_id}`,
     trade_updated: `Troca com ${event.peer_id} esta ${translateStatus(event.status)}`,
     inventory_response: `Inventario de ${event.peer_id} recebido`,
     connection_error: event.message || "Falha ao conectar com um vizinho",
@@ -270,6 +323,7 @@ document.addEventListener("click", async (event) => {
       });
       if (scope === "searches") {
         state.searchResults = [];
+        state.searchTrace = [];
       }
       notice(scope === "trades"
         ? "Trocas encerradas removidas."
@@ -333,6 +387,11 @@ events.onmessage = async ({ data }) => {
   const event = JSON.parse(data);
   addEvent(event);
 
+  if (["search_started", "search_forwarded", "search_stopped"].includes(event.type)) {
+    state.searchTrace.unshift(event);
+    state.searchTrace = state.searchTrace.slice(0, 12);
+  }
+
   if (event.type === "search_hit") {
     state.searchResults.unshift(event);
   }
@@ -371,6 +430,7 @@ function translateStatus(status) {
   return {
     accepted: "aceita",
     completed: "concluida",
+    expired: "expirada",
     failed: "falhou",
     pending: "pendente",
     rejected: "rejeitada"

@@ -279,15 +279,24 @@ function eventLogMessage(event) {
         `${event.peer_url ? ` (${event.peer_url})` : ""}`;
     case "peer_disconnected":
       return `Desconectou de ${event.peer_id}: ${event.reason || "motivo nao informado"}`;
+    case "peer_url_ignored":
+      return `URL descoberta ignorada de ${event.peer_id}: ${event.peer_url}`;
+    case "self_connection_ignored":
+      return `Conexao com o proprio no ignorada: ${event.peer_id}` +
+        `${event.peer_url ? ` (${event.peer_url})` : ""}`;
     case "search_started":
       return `Busca iniciada por ${event.sticker_id} com ttl=${event.ttl}`;
+    case "search_forwarded":
+      return `Busca ${event.sticker_id} repassada de ${event.from_peer_id} para ${event.to_peer_id}: ttl ${event.previous_ttl} -> ${event.ttl}`;
+    case "search_stopped":
+      return `Busca ${event.sticker_id} parada em ttl=${event.ttl}`;
     case "search_hit":
       return `${event.sticker_id} encontrada em ${event.peer_id}` +
         `${event.peer_url ? ` (${event.peer_url})` : ""}`;
     case "search_miss":
       return `${event.sticker_id} nao encontrada em ${event.peer_id}`;
     case "trade_offer":
-      return `Proposta recebida de ${event.peer_id}: oferece ${event.offer_sticker_id} por ${event.want_sticker_id}`;
+      return `Proposta recebida de ${event.peer_id}: voce recebe ${event.offer_sticker_id} e envia ${event.want_sticker_id}`;
     case "trade_updated":
       return `Troca com ${event.peer_id} mudou para ${event.status}` +
         `${event.offer_sticker_id && event.want_sticker_id

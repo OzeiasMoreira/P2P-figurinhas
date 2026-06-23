@@ -2,6 +2,7 @@
 
 const { EventEmitter } = require("node:events");
 const { randomUUID } = require("node:crypto");
+const net = require("node:net");
 const WebSocket = require("ws");
 const {
     ProtocolError,
@@ -32,11 +33,19 @@ class P2PNode extends EventEmitter {
             this.#rememberPeerUrl(url);
         }
         this.reconnectTimers = new Map();
+        this.tradeExpirationTimer = null;
         this.stopped = false;
     }
 
     start() {
         this.stopped = false;
+        this.#expirePendingTrades();
+        if (!this.tradeExpirationTimer) {
+            this.tradeExpirationTimer = setInterval(() => {
+                this.#expirePendingTrades();
+            }, 10_000);
+            this.tradeExpirationTimer.unref();
+        }
         for (const url of this.knownPeerUrls) {
             this.connect(url, "configured");
         }
@@ -44,6 +53,10 @@ class P2PNode extends EventEmitter {
 
     stop() {
         this.stopped = true;
+        if (this.tradeExpirationTimer) {
+            clearInterval(this.tradeExpirationTimer);
+            this.tradeExpirationTimer = null;
+        }
         for (const timer of this.reconnectTimers.values()) {
             clearTimeout(timer);
         }
@@ -193,6 +206,7 @@ class P2PNode extends EventEmitter {
 
     connectedPeers() {
         return [...this.peerSockets.entries()]
+            .filter(([peer_id]) => peer_id !== this.config.peer_id)
             .map(([peer_id, sockets]) => {
                 const openSockets = [...sockets].filter(
                     (socket) => socket.readyState === OPEN
@@ -288,6 +302,7 @@ class P2PNode extends EventEmitter {
     }
 
     offerTrade(peerId, offerStickerId, wantStickerId) {
+        this.#expirePendingTrades();
         const receiver = normalizePeerId(peerId);
         const offer = normalizeStickerId(offerStickerId);
         const want = normalizeStickerId(wantStickerId);
@@ -328,6 +343,7 @@ class P2PNode extends EventEmitter {
     }
 
     respondToTrade(tradeId, accept) {
+        this.#expirePendingTrades();
         const trade = this.store.findTrade(tradeId, "incoming");
         if (!trade || trade.status !== "pending") {
             throw new Error("Proposta pendente não encontrada");
@@ -462,6 +478,21 @@ class P2PNode extends EventEmitter {
 
     #handleHello(socket, message) {
         const previousPeerId = socket.p2p.peerId;
+        if (message.sender_peer_id === this.config.peer_id) {
+            socket.p2p.canceling = true;
+            if (message.peer_url) {
+                this.#forgetPeerUrl(message.peer_url, true);
+            }
+            if (socket.p2p.outboundUrl) {
+                this.#forgetPeerUrl(socket.p2p.outboundUrl, true);
+            }
+            this.#emit("self_connection_ignored", {
+                peer_id: message.sender_peer_id,
+                peer_url: message.peer_url || socket.p2p.outboundUrl || null
+            });
+            socket.close(1000, "conexao com o proprio no ignorada");
+            return;
+        }
         const manualConnection = ["manual", "configured"].includes(socket.p2p.connectionSource);
         if (manualConnection) {
             this.manuallyDisconnectedPeerIds.delete(message.sender_peer_id);
@@ -486,7 +517,15 @@ class P2PNode extends EventEmitter {
             try {
                 senderPeerUrl = normalizePeerUrl(message.peer_url);
                 socket.p2p.peerUrl = senderPeerUrl;
-                discoveredNewUrl = this.#rememberPeerUrl(message.peer_url) || discoveredNewUrl;
+                if (isDiscoverablePeerUrl(senderPeerUrl)) {
+                    discoveredNewUrl = this.#rememberPeerUrl(message.peer_url) || discoveredNewUrl;
+                } else {
+                    this.#emit("peer_url_ignored", {
+                        peer_id: message.sender_peer_id,
+                        peer_url: senderPeerUrl,
+                        reason: "hostname_not_resolvable"
+                    });
+                }
             } catch {
                 senderPeerUrl = "";
             }
@@ -495,10 +534,21 @@ class P2PNode extends EventEmitter {
             if (typeof peerUrl !== "string") {
                 continue;
             }
+            if (!looksLikePeerUrl(peerUrl)) {
+                continue;
+            }
             let normalizedPeerUrl;
             try {
                 normalizedPeerUrl = normalizePeerUrl(peerUrl);
             } catch {
+                continue;
+            }
+            if (!isDiscoverablePeerUrl(normalizedPeerUrl)) {
+                this.#emit("peer_url_ignored", {
+                    peer_id: message.sender_peer_id,
+                    peer_url: normalizedPeerUrl,
+                    reason: "hostname_not_resolvable"
+                });
                 continue;
             }
             const isSenderUrl = senderPeerUrl && normalizedPeerUrl === senderPeerUrl;
@@ -571,6 +621,13 @@ class P2PNode extends EventEmitter {
         }
 
         if (message.ttl <= 0) {
+            this.#emit("search_stopped", {
+                query_id: message.query_id,
+                sticker_id: message.sticker_id,
+                ttl: message.ttl,
+                reason: "ttl_expired",
+                from_peer_id: socket.p2p.peerId || message.sender_peer_id
+            });
             return;
         }
 
@@ -578,15 +635,24 @@ class P2PNode extends EventEmitter {
             if (neighbor === socket || !neighbor.p2p.peerId) {
                 continue;
             }
+            const nextTtl = message.ttl - 1;
             this.#send(neighbor, createMessage("SEARCH", {
                 origin_peer_id: message.origin_peer_id,
                 origin_peer_ip: message.origin_peer_ip,
                 sender_peer_id: this.config.peer_id,
                 receiver_peer_id: neighbor.p2p.peerId,
                 query_id: message.query_id,
-                ttl: message.ttl - 1,
+                ttl: nextTtl,
                 sticker_id: message.sticker_id
             }));
+            this.#emit("search_forwarded", {
+                query_id: message.query_id,
+                sticker_id: message.sticker_id,
+                from_peer_id: socket.p2p.peerId || message.sender_peer_id,
+                to_peer_id: neighbor.p2p.peerId,
+                previous_ttl: message.ttl,
+                ttl: nextTtl
+            });
         }
     }
 
@@ -927,6 +993,17 @@ class P2PNode extends EventEmitter {
         }
     }
 
+    #expirePendingTrades() {
+        const expired = this.store.expirePendingTrades();
+        for (const trade of expired) {
+            this.#emit("trade_updated", trade);
+        }
+        if (expired.length) {
+            this.#emit("inventory_updated", { inventory: this.store.inventoryList() });
+        }
+        return expired;
+    }
+
     #emit(type, data = {}) {
         this.emit("event", {
             type,
@@ -953,6 +1030,24 @@ function normalizePeerUrl(rawUrl) {
         parsed.port = "8080";
     }
   return parsed.toString();
+}
+
+function looksLikePeerUrl(value) {
+    const candidate = String(value || "").trim();
+    return /^[a-z][a-z0-9+.-]*:\/\//i.test(candidate) ||
+        candidate.includes(".") ||
+        candidate.includes(":") ||
+        candidate.toLowerCase() === "localhost";
+}
+
+function isDiscoverablePeerUrl(rawUrl) {
+    let hostname;
+    try {
+        hostname = new URL(normalizePeerUrl(rawUrl)).hostname.toLowerCase();
+    } catch {
+        return false;
+    }
+    return hostname === "localhost" || net.isIP(hostname) !== 0;
 }
 
 function originPeerAddress(advertisedUrl) {

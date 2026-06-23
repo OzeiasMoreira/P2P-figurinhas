@@ -42,7 +42,7 @@ function waitForEvent(node, type, predicate = () => true, timeout = 5000) {
   });
 }
 
-function connectAndHello(url, peerId) {
+function connectAndHello(url, peerId, peers = []) {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(url);
     const timer = setTimeout(() => {
@@ -54,7 +54,7 @@ function connectAndHello(url, peerId) {
         type: "HELLO",
         message_id: `550e8400-e29b-41d4-a716-44665544${peerId.slice(-2)}00`,
         sender_peer_id: peerId,
-        peers: []
+        peers
       }));
     });
     socket.once("message", (data) => {
@@ -153,6 +153,27 @@ test("conexão manual aguarda o HELLO do vizinho", async (context) => {
   assert.equal(first.node.connectedPeers()[0].incoming, false);
   assert.equal(second.node.connectedPeers()[0].incoming, true);
   assert.equal(second.node.connectedPeers()[0].outgoing, false);
+});
+
+test("ignora IDs de aluno anunciados como peers no HELLO", async (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "p2p-hello-peer-ids-"));
+  const app = createApplication(config(directory, 19));
+  context.after(async () => {
+    await app.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  await app.listen();
+
+  await connectAndHello(
+    `ws://127.0.0.1:${app.config.port}`,
+    "ALUNO-20",
+    ["ALUNO-19", "ALUNO-21"]
+  );
+
+  assert.equal(
+    [...app.node.knownPeerUrls].some((url) => url.includes("aluno-")),
+    false
+  );
 });
 
 test("conexão manual informa falha em destino indisponível", async (context) => {
@@ -422,4 +443,38 @@ test("rejeita troca quando TRADE_REJECT vem sem trade_id", async (context) => {
   await rejected;
   assert.equal(first.store.quantity("FIG-01"), 28);
   assert.equal(first.store.quantity("FIG-02"), 0);
+});
+
+test("ignora conexao que se identifica como o proprio aluno", async (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "p2p-self-connection-"));
+  const app = createApplication(config(directory, 19));
+  context.after(async () => {
+    await app.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  await app.listen();
+
+  const ignored = waitForEvent(app.node, "self_connection_ignored");
+  const socket = new WebSocket(`ws://127.0.0.1:${app.config.port}`);
+  socket.once("open", () => {
+    socket.send(JSON.stringify({
+      type: "HELLO",
+      message_id: "550e8400-e29b-41d4-a716-446655441900",
+      sender_peer_id: "ALUNO-19",
+      peer_url: "ws://172.16.3.109:8080/",
+      peers: []
+    }));
+  });
+
+  await ignored;
+  socket.close();
+
+  assert.equal(
+    app.node.connectedPeers().some((peer) => peer.peer_id === "ALUNO-19"),
+    false
+  );
+  assert.equal(
+    app.node.knownPeerUrls.has(normalizePeerUrl("ws://172.16.3.109:8080/")),
+    false
+  );
 });

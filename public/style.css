@@ -186,6 +186,12 @@ main {
   flex: 0 0 auto;
 }
 
+.search-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: -4px 0 12px;
+}
+
 form {
   display: grid;
   gap: 13px;
@@ -467,9 +473,18 @@ button.small {
   color: var(--accent);
 }
 
+.status.pending {
+  color: var(--blue);
+}
+
 .status.rejected,
+.status.expired,
 .status.failed {
   color: var(--danger);
+}
+
+.search-step {
+  border-style: dashed;
 }
 
 .event-log {

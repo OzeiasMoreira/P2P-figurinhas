@@ -147,3 +147,28 @@ test("limpa historico sem apagar trocas ativas", (context) => {
   );
   assert.deepEqual(store.state.searches, []);
 });
+
+test("expira propostas pendentes antigas e libera quantidade reservada", (context) => {
+  const { directory, store } = temporaryStore();
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const createdAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+
+  store.addTrade({
+    trade_id: "old-pending",
+    direction: "outgoing",
+    peer_id: "ALUNO-02",
+    offer_sticker_id: "FIG-01",
+    want_sticker_id: "FIG-02",
+    status: "pending",
+    created_at: createdAt,
+    expires_at: new Date(Date.now() - 5 * 60 * 1000).toISOString()
+  });
+
+  assert.equal(store.reservedQuantity("FIG-01"), 1);
+  const expired = store.expirePendingTrades();
+
+  assert.equal(expired.length, 1);
+  assert.equal(store.state.trades[0].status, "expired");
+  assert.equal(store.reservedQuantity("FIG-01"), 0);
+  assert.equal(store.availableQuantity("FIG-01"), 28);
+});
