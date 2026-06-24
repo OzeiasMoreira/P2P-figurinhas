@@ -173,8 +173,8 @@ function renderSearchResults() {
         <strong>${escapeHtml(searchTraceTitle(event))}</strong>
         <div class="muted">${escapeHtml(searchTraceDetail(event))}</div>
       </div>
-      <span class="status ${event.type === "search_stopped" ? "failed" : "pending"}">
-        ttl ${event.ttl}
+      <span class="status ${searchTraceStatusClass(event)}">
+        ${escapeHtml(searchTraceStatusText(event))}
       </span>
     </div>
   `).join("");
@@ -185,7 +185,14 @@ function renderSearchResults() {
         <strong>${result.sticker_id}</strong>
         <div class="muted">Encontrada em ${result.peer_id}</div>
       </div>
-      <span class="status completed">encontrada</span>
+      <div class="result-actions">
+        <span class="status completed">encontrada</span>
+        <button class="small secondary" type="button"
+          data-propose-peer="${escapeHtml(result.peer_id)}"
+          data-propose-sticker="${escapeHtml(result.sticker_id)}">
+          Propor troca
+        </button>
+      </div>
     </div>
   `).join("");
 
@@ -199,23 +206,54 @@ function searchTraceTitle(event) {
   if (event.type === "search_forwarded") {
     return `${event.sticker_id} repassada`;
   }
+  if (event.type === "search_received") {
+    return `${event.sticker_id} recebida`;
+  }
   if (event.type === "search_stopped") {
     return `${event.sticker_id} parada`;
+  }
+  if (event.type === "search_miss") {
+    return `${event.sticker_id} nao encontrada`;
   }
   return event.sticker_id || "Busca";
 }
 
 function searchTraceDetail(event) {
+  if (event.type === "search_miss") {
+    if (event.reason === "timeout") {
+      return "Tempo limite da busca esgotado.";
+    }
+    if (event.reason === "no_neighbors") {
+      return "Nenhum vizinho respondeu ou havia caminho para continuar.";
+    }
+    return event.peer_id
+      ? `${event.peer_id} informou que nao encontrou.`
+      : "A figurinha nao foi encontrada.";
+  }
   if (event.type === "search_started") {
     return `Busca iniciada com TTL ${event.ttl}.`;
   }
   if (event.type === "search_forwarded") {
     return `${event.from_peer_id} -> ${event.to_peer_id}, TTL ${event.previous_ttl} -> ${event.ttl}.`;
   }
+  if (event.type === "search_received") {
+    return `${event.from_peer_id} -> ${event.receiver_peer_id}, TTL ${event.ttl}.`;
+  }
   if (event.type === "search_stopped") {
     return `TTL chegou em ${event.ttl}; este nó nao repassou mais.`;
   }
   return "";
+}
+
+function searchTraceStatusClass(event) {
+  return ["search_stopped", "search_miss"].includes(event.type) ? "failed" : "pending";
+}
+
+function searchTraceStatusText(event) {
+  if (event.type === "search_miss") {
+    return "nao encontrada";
+  }
+  return `ttl ${event.ttl}`;
 }
 
 function addEvent(event) {
@@ -254,10 +292,19 @@ function eventMessage(event) {
     peer_url_ignored: `URL ignorada de ${event.peer_id}: ${event.peer_url}`,
     self_connection_ignored: `Conexao comigo mesmo ignorada: ${event.peer_url || event.peer_id}`,
     search_started: `Buscando ${event.sticker_id} na rede`,
+    search_received: `${event.sticker_id} recebida de ${event.from_peer_id}: ttl ${event.ttl}`,
     search_forwarded: `${event.sticker_id} repassada para ${event.to_peer_id}: ttl ${event.previous_ttl} -> ${event.ttl}`,
     search_stopped: `${event.sticker_id} parou porque o ttl chegou em ${event.ttl}`,
     search_hit: `${event.sticker_id} encontrada em ${event.peer_id}`,
+    search_miss: event.reason === "timeout"
+      ? `${event.sticker_id} nao encontrada: tempo limite esgotado`
+      : `${event.sticker_id} nao encontrada${event.peer_id ? ` em ${event.peer_id}` : ""}`,
     trade_offer: `Nova proposta de ${event.peer_id}: voce recebe ${event.offer_sticker_id} e envia ${event.want_sticker_id}`,
+    trade_attempt: `Tentando propor troca com ${event.peer_id}${event.peer_url ? ` em ${event.peer_url}` : ": sem URL encontrada"}`,
+    trade_connecting: `Conectando em ${event.peer_id} para enviar a troca`,
+    trade_connection_ready: `Conexao pronta com ${event.peer_id} para troca`,
+    trade_connection_missing_url: `Nao foi encontrada URL para conectar em ${event.peer_id}`,
+    trade_failed: `Falha ao propor troca com ${event.peer_id}: ${event.reason || "sem detalhe"}`,
     trade_updated: `Troca com ${event.peer_id} esta ${translateStatus(event.status)}`,
     inventory_response: `Inventario de ${event.peer_id} recebido`,
     connection_error: event.message || "Falha ao conectar com um vizinho",
@@ -269,6 +316,7 @@ function eventMessage(event) {
 
 function isErrorEvent(event) {
   return event.type === "connection_error" || event.type === "protocol_error" ||
+    event.type === "trade_failed" || event.type === "trade_connection_missing_url" ||
     event.status === "failed";
 }
 
@@ -356,6 +404,16 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  const proposeButton = event.target.closest("[data-propose-peer]");
+  if (proposeButton) {
+    const form = $("#trade-form");
+    form.elements.peer_id.value = proposeButton.dataset.proposePeer;
+    form.elements.want_sticker_id.value = proposeButton.dataset.proposeSticker;
+    form.elements.offer_sticker_id.focus();
+    notice(`Escolha a figurinha que voce vai oferecer para ${proposeButton.dataset.proposePeer}.`);
+    return;
+  }
+
   const openButton = event.target.closest("[data-dialog]");
   if (openButton) {
     $(`#${openButton.dataset.dialog}`).showModal();
@@ -387,7 +445,7 @@ events.onmessage = async ({ data }) => {
   const event = JSON.parse(data);
   addEvent(event);
 
-  if (["search_started", "search_forwarded", "search_stopped"].includes(event.type)) {
+  if (["search_started", "search_received", "search_forwarded", "search_stopped", "search_miss"].includes(event.type)) {
     state.searchTrace.unshift(event);
     state.searchTrace = state.searchTrace.slice(0, 12);
   }
@@ -411,7 +469,7 @@ events.onmessage = async ({ data }) => {
   }
 
   if (["peer_connected", "peer_disconnected", "trade_offer", "trade_updated",
-    "inventory_updated", "search_hit", "history_cleared"].includes(event.type)) {
+    "inventory_updated", "search_hit", "search_miss", "history_cleared"].includes(event.type)) {
     await refresh();
   } else {
     renderSearchResults();

@@ -44,11 +44,26 @@ function loadConfig(configPath = process.env.CONFIG_PATH || "config.json") {
 
 function resolveAdvertisedUrl(configuredUrl, host, port) {
   if (configuredUrl && configuredUrl !== "auto") {
-    return configuredUrl;
+    return normalizeWebSocketUrl(configuredUrl);
   }
 
   const address = host === "0.0.0.0" ? findLanIpv4() : host;
   return `ws://${address}:${port}`;
+}
+
+function normalizeWebSocketUrl(rawUrl) {
+  const value = String(rawUrl || "").trim();
+  const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(value)
+    ? value
+    : `ws://${value}`;
+  const parsed = new URL(withProtocol);
+  if (!["ws:", "wss:"].includes(parsed.protocol)) {
+    throw new Error("advertised_url deve usar ws:// ou wss://");
+  }
+  if (!parsed.port) {
+    parsed.port = "8080";
+  }
+  return parsed.toString();
 }
 
 function findLanIpv4() {
@@ -63,4 +78,34 @@ function findLanIpv4() {
   return "127.0.0.1";
 }
 
-module.exports = { findLanIpv4, loadConfig, resolveAdvertisedUrl };
+function saveConfigNeighbors(config, neighbors) {
+  if (!config?.config_path) {
+    return false;
+  }
+  const absolutePath = path.resolve(config.config_path);
+  if (!fs.existsSync(absolutePath)) {
+    return false;
+  }
+
+  const raw = JSON.parse(fs.readFileSync(absolutePath, "utf8"));
+  const normalizedNeighbors = [...new Set(neighbors || [])].sort();
+  const currentNeighbors = Array.isArray(raw.neighbors) ? [...raw.neighbors].sort() : [];
+  if (JSON.stringify(currentNeighbors) === JSON.stringify(normalizedNeighbors)) {
+    return false;
+  }
+
+  raw.neighbors = normalizedNeighbors;
+  const temporary = `${absolutePath}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(raw, null, 2)}\n`, "utf8");
+  fs.renameSync(temporary, absolutePath);
+  config.neighbors = normalizedNeighbors;
+  return true;
+}
+
+module.exports = {
+  findLanIpv4,
+  loadConfig,
+  normalizeWebSocketUrl,
+  resolveAdvertisedUrl,
+  saveConfigNeighbors
+};

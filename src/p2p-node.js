@@ -4,6 +4,7 @@ const { EventEmitter } = require("node:events");
 const { randomUUID } = require("node:crypto");
 const net = require("node:net");
 const WebSocket = require("ws");
+const { saveConfigNeighbors } = require("./config");
 const {
     ProtocolError,
     createMessage,
@@ -14,6 +15,7 @@ const {
 
 const OPEN = WebSocket.OPEN;
 const CONNECTING = WebSocket.CONNECTING;
+const DEFAULT_SEARCH_TIMEOUT_MS = 8000;
 
 class P2PNode extends EventEmitter {
     constructor(config, store) {
@@ -24,12 +26,13 @@ class P2PNode extends EventEmitter {
         this.peerSockets = new Map();
         this.outboundSockets = new Map();
         this.queryRoutes = new Map();
+        this.pendingSearches = new Map();
         this.inventorySnapshots = new Map();
         this.processedMessages = new Set();
         this.manuallyDisconnectedPeerIds = new Set();
         this.manuallyDisconnectedPeerUrls = new Set();
         this.knownPeerUrls = new Set();
-        for (const url of config.neighbors || []) {
+        for (const url of [...(config.neighbors || []), ...this.store.neighborList()]) {
             this.#rememberPeerUrl(url);
         }
         this.reconnectTimers = new Map();
@@ -51,8 +54,15 @@ class P2PNode extends EventEmitter {
         }
     }
 
+    clearSavedPeers() {
+        this.knownPeerUrls.clear();
+        this.store.clearNeighbors();
+        this.#saveKnownPeerUrls();
+    }
+
     stop() {
         this.stopped = true;
+        this.clearSavedPeers();
         if (this.tradeExpirationTimer) {
             clearInterval(this.tradeExpirationTimer);
             this.tradeExpirationTimer = null;
@@ -61,6 +71,10 @@ class P2PNode extends EventEmitter {
             clearTimeout(timer);
         }
         this.reconnectTimers.clear();
+        for (const search of this.pendingSearches.values()) {
+            clearTimeout(search.timer);
+        }
+        this.pendingSearches.clear();
         for (const socket of this.sockets) {
             socket.close();
         }
@@ -212,18 +226,17 @@ class P2PNode extends EventEmitter {
                     (socket) => socket.readyState === OPEN
                 );
                 const outgoing = openSockets.some((socket) => socket.p2p.outboundUrl);
+                const incoming = openSockets.some((socket) => !socket.p2p.outboundUrl);
                 return {
                     peer_id,
                     connections: openSockets.length,
-                    incoming: !outgoing && openSockets.some(
-                        (socket) => !socket.p2p.outboundUrl
-                    ),
+                    incoming,
                     outgoing,
                     connected_at: openSockets
                         .map((socket) => socket.p2p.connectedAt)
                         .sort()[0] || null,
                     urls: openSockets
-                        .map((socket) => socket.p2p.outboundUrl)
+                        .map((socket) => socket.p2p.outboundUrl || socket.p2p.peerUrl)
                         .filter(Boolean)
                 };
             })
@@ -271,17 +284,8 @@ class P2PNode extends EventEmitter {
             ttl
         });
 
-        if (this.store.quantity(normalized) > 0) {
-            const result = {
-                query_id: queryId,
-                sticker_id: normalized,
-                peer_id: this.config.peer_id,
-                peer_url: this.config.advertised_url
-            };
-            this.#emit("search_hit", result);
-            return queryId;
-        }
-
+        this.#trackPendingSearch(queryId, normalized);
+        let sent = 0;
         for (const socket of this.#openSockets()) {
             if (!socket.p2p.peerId) {
                 continue;
@@ -295,13 +299,23 @@ class P2PNode extends EventEmitter {
                 ttl,
                 sticker_id: normalized
             }));
+            sent += 1;
         }
 
         this.#emit("search_started", { query_id: queryId, sticker_id: normalized, ttl });
+        if (sent === 0) {
+            this.#finishPendingSearch(queryId);
+            this.#emit("search_miss", {
+                query_id: queryId,
+                sticker_id: normalized,
+                peer_id: null,
+                reason: "no_neighbors"
+            });
+        }
         return queryId;
     }
 
-    offerTrade(peerId, offerStickerId, wantStickerId) {
+    async offerTrade(peerId, offerStickerId, wantStickerId) {
         this.#expirePendingTrades();
         const receiver = normalizePeerId(peerId);
         const offer = normalizeStickerId(offerStickerId);
@@ -309,8 +323,35 @@ class P2PNode extends EventEmitter {
         if (offer === want) {
             throw new Error("As figurinhas oferecida e desejada devem ser diferentes");
         }
+        const hit = this.store.findSearchHit(receiver, want);
+        if (!hit) {
+            throw new Error(
+                `Busque ${want} na rede antes de propor troca com ${receiver}`
+            );
+        }
         if (this.store.availableQuantity(offer) < 1) {
             throw new Error(`Sem disponibilidade de ${offer}`);
+        }
+
+        this.#emit("trade_attempt", {
+            peer_id: receiver,
+            offer_sticker_id: offer,
+            want_sticker_id: want,
+            peer_url: hit.peer_url || "",
+            already_connected: this.#hasOpenPeerSocket(receiver)
+        });
+
+        try {
+            await this.#connectToSearchHitPeer(receiver, want, hit);
+        } catch (error) {
+            this.#emit("trade_failed", {
+                peer_id: receiver,
+                offer_sticker_id: offer,
+                want_sticker_id: want,
+                peer_url: hit.peer_url || "",
+                reason: error.message
+            });
+            throw error;
         }
 
         const tradeId = randomUUID();
@@ -335,6 +376,14 @@ class P2PNode extends EventEmitter {
         });
         if (!this.#sendToPeer(receiver, message)) {
             this.store.updateTrade(tradeId, { status: "failed" }, "outgoing");
+            this.#emit("trade_failed", {
+                trade_id: tradeId,
+                peer_id: receiver,
+                offer_sticker_id: offer,
+                want_sticker_id: want,
+                peer_url: hit.peer_url || "",
+                reason: `Sem socket aberto para ${receiver}. Sockets: ${this.#peerSocketStates(receiver)}`
+            });
             throw new Error(`O peer ${receiver} não está conectado`);
         }
 
@@ -530,6 +579,13 @@ class P2PNode extends EventEmitter {
                 senderPeerUrl = "";
             }
         }
+        if (!senderPeerUrl) {
+            senderPeerUrl = this.#peerUrlFromSocket(socket);
+            if (senderPeerUrl) {
+                socket.p2p.peerUrl = senderPeerUrl;
+                discoveredNewUrl = this.#rememberPeerUrl(senderPeerUrl) || discoveredNewUrl;
+            }
+        }
         for (const peerUrl of message.peers || []) {
             if (typeof peerUrl !== "string") {
                 continue;
@@ -590,7 +646,9 @@ class P2PNode extends EventEmitter {
     }
 
     #handleSearch(socket, message) {
-        if (message.receiver_peer_id !== this.config.peer_id) {
+        const receivedByThisNode = message.receiver_peer_id === this.config.peer_id;
+        const cameFromConnectedSender = socket.p2p.peerId === message.sender_peer_id;
+        if (!receivedByThisNode && !cameFromConnectedSender) {
             return;
         }
         if (this.store.hasProcessedQuery(message.query_id)) {
@@ -605,6 +663,15 @@ class P2PNode extends EventEmitter {
             origin_peer_id: message.origin_peer_id,
             sticker_id: message.sticker_id,
             ttl: message.ttl
+        });
+        this.#emit("search_received", {
+            query_id: message.query_id,
+            sticker_id: message.sticker_id,
+            origin_peer_id: message.origin_peer_id,
+            from_peer_id: socket.p2p.peerId || message.sender_peer_id,
+            receiver_peer_id: message.receiver_peer_id,
+            ttl: message.ttl,
+            receiver_mismatch: !receivedByThisNode
         });
 
         if (this.store.quantity(message.sticker_id) > 0) {
@@ -628,13 +695,22 @@ class P2PNode extends EventEmitter {
                 reason: "ttl_expired",
                 from_peer_id: socket.p2p.peerId || message.sender_peer_id
             });
+            this.#sendSearchMiss(socket, message, "ttl_expired");
             return;
         }
 
+        const alreadyForwardedTo = new Set([
+            socket.p2p.peerId,
+            message.sender_peer_id,
+            message.origin_peer_id
+        ].filter(Boolean));
+        let forwarded = 0;
         for (const neighbor of this.#openSockets()) {
-            if (neighbor === socket || !neighbor.p2p.peerId) {
+            if (neighbor === socket || !neighbor.p2p.peerId ||
+                alreadyForwardedTo.has(neighbor.p2p.peerId)) {
                 continue;
             }
+            alreadyForwardedTo.add(neighbor.p2p.peerId);
             const nextTtl = message.ttl - 1;
             this.#send(neighbor, createMessage("SEARCH", {
                 origin_peer_id: message.origin_peer_id,
@@ -645,6 +721,7 @@ class P2PNode extends EventEmitter {
                 ttl: nextTtl,
                 sticker_id: message.sticker_id
             }));
+            forwarded += 1;
             this.#emit("search_forwarded", {
                 query_id: message.query_id,
                 sticker_id: message.sticker_id,
@@ -653,6 +730,16 @@ class P2PNode extends EventEmitter {
                 previous_ttl: message.ttl,
                 ttl: nextTtl
             });
+        }
+        if (forwarded === 0) {
+            this.#emit("search_stopped", {
+                query_id: message.query_id,
+                sticker_id: message.sticker_id,
+                ttl: message.ttl,
+                reason: "no_neighbors",
+                from_peer_id: socket.p2p.peerId || message.sender_peer_id
+            });
+            this.#sendSearchMiss(socket, message, "no_neighbors");
         }
     }
 
@@ -669,6 +756,7 @@ class P2PNode extends EventEmitter {
                 if (message.peer_url) {
                     this.connect(message.peer_url, "discovered");
                 }
+                this.#finishPendingSearch(message.query_id);
                 this.#emit("search_hit", result);
             } else {
                 this.#emit("search_miss", {
@@ -688,6 +776,46 @@ class P2PNode extends EventEmitter {
                 sender_peer_id: this.config.peer_id
             });
         }
+    }
+
+    #sendSearchMiss(socket, message, reason) {
+        this.#send(socket, createMessage("SEARCH_MISS", {
+            origin_peer_id: this.config.peer_id,
+            sender_peer_id: this.config.peer_id,
+            receiver_peer_id: message.origin_peer_id,
+            query_id: message.query_id,
+            sticker_id: message.sticker_id,
+            reason
+        }));
+    }
+
+    #trackPendingSearch(queryId, stickerId) {
+        this.#finishPendingSearch(queryId);
+        const timeoutMs = Number(this.config.search_timeout_ms) || DEFAULT_SEARCH_TIMEOUT_MS;
+        const timer = setTimeout(() => {
+            if (!this.pendingSearches.has(queryId)) {
+                return;
+            }
+            this.pendingSearches.delete(queryId);
+            this.#emit("search_miss", {
+                query_id: queryId,
+                sticker_id: stickerId,
+                peer_id: null,
+                reason: "timeout"
+            });
+        }, timeoutMs);
+        timer.unref();
+        this.pendingSearches.set(queryId, { sticker_id: stickerId, timer });
+    }
+
+    #finishPendingSearch(queryId) {
+        const pending = this.pendingSearches.get(queryId);
+        if (!pending) {
+            return false;
+        }
+        clearTimeout(pending.timer);
+        this.pendingSearches.delete(queryId);
+        return true;
     }
 
     #handleTradeOffer(message) {
@@ -848,11 +976,24 @@ class P2PNode extends EventEmitter {
     }
 
     #peerUrlsForHello() {
-        const peers = [...this.knownPeerUrls];
-        if (this.config.advertised_url) {
-            peers.unshift(normalizePeerUrl(this.config.advertised_url));
+        const peers = new Set();
+        let localUrl = "";
+        try {
+            localUrl = normalizePeerUrl(this.config.advertised_url);
+        } catch {
+            localUrl = "";
         }
-        return [...new Set(peers)];
+        for (const peerUrl of this.knownPeerUrls) {
+            try {
+                const normalized = normalizePeerUrl(peerUrl);
+                if (normalized !== localUrl) {
+                    peers.add(normalized);
+                }
+            } catch {
+                continue;
+            }
+        }
+        return [...peers];
     }
 
     #sendToPeer(peerId, message) {
@@ -862,6 +1003,67 @@ class P2PNode extends EventEmitter {
         }
         const socket = [...sockets].find((candidate) => candidate.readyState === OPEN);
         return socket ? this.#send(socket, message) : false;
+    }
+
+    async #connectToSearchHitPeer(peerId, stickerId, knownHit = null) {
+        const sockets = this.peerSockets.get(peerId);
+        if ([...(sockets || [])].some((socket) => socket.readyState === OPEN)) {
+            this.#emit("trade_connection_ready", {
+                peer_id: peerId,
+                sticker_id: stickerId,
+                reason: "already_connected"
+            });
+            return;
+        }
+
+        const hit = knownHit || this.store.findSearchHit(peerId, stickerId);
+        if (!hit?.peer_url) {
+            this.#emit("trade_connection_missing_url", {
+                peer_id: peerId,
+                sticker_id: stickerId
+            });
+            return;
+        }
+
+        this.#emit("trade_connecting", {
+            peer_id: peerId,
+            sticker_id: stickerId,
+            peer_url: hit.peer_url
+        });
+        const connected = await this.connectAndWait(hit.peer_url, 5000);
+        if (connected.peer_id !== peerId) {
+            throw new Error(
+                `A busca encontrou ${peerId}, mas ${hit.peer_url} se identificou como ${connected.peer_id}`
+            );
+        }
+        this.#emit("trade_connection_ready", {
+            peer_id: peerId,
+            sticker_id: stickerId,
+            peer_url: hit.peer_url,
+            reason: "connected_from_search_hit"
+        });
+    }
+
+    #hasOpenPeerSocket(peerId) {
+        return [...(this.peerSockets.get(peerId) || [])].some(
+            (socket) => socket.readyState === OPEN
+        );
+    }
+
+    #peerSocketStates(peerId) {
+        const sockets = [...(this.peerSockets.get(peerId) || [])];
+        if (sockets.length === 0) {
+            return "nenhum";
+        }
+        return sockets.map((socket) => {
+            const states = {
+                [WebSocket.CONNECTING]: "CONNECTING",
+                [WebSocket.OPEN]: "OPEN",
+                [WebSocket.CLOSING]: "CLOSING",
+                [WebSocket.CLOSED]: "CLOSED"
+            };
+            return `${states[socket.readyState] || socket.readyState}:${socket.p2p?.peerUrl || socket.p2p?.outboundUrl || "sem_url"}`;
+        }).join(", ");
     }
 
     #send(socket, message) {
@@ -894,7 +1096,12 @@ class P2PNode extends EventEmitter {
         }
         const previousSize = this.knownPeerUrls.size;
         this.knownPeerUrls.add(url);
-        return this.knownPeerUrls.size > previousSize;
+        const added = this.knownPeerUrls.size > previousSize;
+        if (added) {
+            this.store.addNeighbor(url);
+            this.#saveKnownPeerUrls();
+        }
+        return added;
     }
 
     #forgetPeerUrl(rawUrl, block = false) {
@@ -904,7 +1111,11 @@ class P2PNode extends EventEmitter {
         } catch {
             return false;
         }
-        this.knownPeerUrls.delete(url);
+        const removed = this.knownPeerUrls.delete(url);
+        if (removed) {
+            this.store.removeNeighbor(url);
+            this.#saveKnownPeerUrls();
+        }
         if (block) {
             this.manuallyDisconnectedPeerUrls.add(url);
         }
@@ -975,7 +1186,10 @@ class P2PNode extends EventEmitter {
     }
 
     #cancelOutboundConnection(url, socket) {
-        this.knownPeerUrls.delete(url);
+        if (this.knownPeerUrls.delete(url)) {
+            this.store.removeNeighbor(url);
+            this.#saveKnownPeerUrls();
+        }
         const timer = this.reconnectTimers.get(url);
         if (timer) {
             clearTimeout(timer);
@@ -1002,6 +1216,28 @@ class P2PNode extends EventEmitter {
             this.#emit("inventory_updated", { inventory: this.store.inventoryList() });
         }
         return expired;
+    }
+
+    #saveKnownPeerUrls() {
+        saveConfigNeighbors(this.config, [...this.knownPeerUrls]);
+    }
+
+    #peerUrlFromSocket(socket) {
+        const address = socket?._socket?.remoteAddress;
+        if (!address) {
+            return "";
+        }
+        const normalizedAddress = address.startsWith("::ffff:")
+            ? address.slice("::ffff:".length)
+            : address;
+        if (!net.isIP(normalizedAddress)) {
+            return "";
+        }
+        const port = this.config.port || 8080;
+        const host = normalizedAddress.includes(":")
+            ? `[${normalizedAddress}]`
+            : normalizedAddress;
+        return normalizePeerUrl(`ws://${host}:${port}`);
     }
 
     #emit(type, data = {}) {

@@ -172,3 +172,72 @@ test("expira propostas pendentes antigas e libera quantidade reservada", (contex
   assert.equal(store.reservedQuantity("FIG-01"), 0);
   assert.equal(store.availableQuantity("FIG-01"), 28);
 });
+
+test("salva e remove vizinhos no estado local", (context) => {
+  const { directory, store } = temporaryStore();
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  assert.equal(store.addNeighbor("ws://172.16.3.88:8080/"), true);
+  assert.equal(store.addNeighbor("ws://172.16.3.88:8080/"), false);
+  assert.deepEqual(store.neighborList(), ["ws://172.16.3.88:8080/"]);
+
+  const reloaded = new Store(store.filePath, {
+    sticker_id: "FIG-01",
+    image_url: "https://example.test/FIG-01.png"
+  });
+  assert.deepEqual(reloaded.neighborList(), ["ws://172.16.3.88:8080/"]);
+
+  assert.equal(reloaded.removeNeighbor("ws://172.16.3.88:8080/"), true);
+  assert.deepEqual(reloaded.neighborList(), []);
+});
+
+test("limpa todos os vizinhos do estado local", (context) => {
+  const { directory, store } = temporaryStore();
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  store.addNeighbor("ws://172.16.3.88:8080/");
+  store.addNeighbor("ws://172.16.3.70:8080/");
+  assert.equal(store.clearNeighbors(), 2);
+  assert.deepEqual(store.neighborList(), []);
+});
+
+test("carrega lista de vizinhos de arquivos antigos sem neighbors", (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "p2p-store-old-neighbors-"));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "state.json");
+  fs.writeFileSync(filePath, JSON.stringify({
+    inventory: {},
+    processed_queries: [],
+    searches: [],
+    trades: []
+  }), "utf8");
+
+  const store = new Store(filePath, {
+    sticker_id: "FIG-01",
+    image_url: "https://example.test/FIG-01.png"
+  });
+
+  assert.deepEqual(store.neighborList(), []);
+  assert.deepEqual(JSON.parse(fs.readFileSync(filePath, "utf8")).neighbors, []);
+});
+
+test("identifica SEARCH_HIT antes de permitir proposta", (context) => {
+  const { directory, store } = temporaryStore();
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  assert.equal(store.hasSearchHit("ALUNO-02", "FIG-02"), false);
+  store.addSearch({
+    kind: "SEARCH_HIT",
+    query_id: "query-2",
+    sticker_id: "FIG-02",
+    peer_id: "ALUNO-02",
+    peer_url: "ws://127.0.0.1:8080/"
+  });
+
+  assert.equal(store.hasSearchHit("ALUNO-02", "FIG-02"), true);
+  assert.equal(store.hasSearchHit("ALUNO-03", "FIG-02"), false);
+  assert.equal(
+    store.findSearchHit("ALUNO-02", "FIG-02").peer_url,
+    "ws://127.0.0.1:8080/"
+  );
+});

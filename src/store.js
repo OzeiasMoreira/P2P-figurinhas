@@ -25,6 +25,7 @@ class Store {
       const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8"));
       const state = {
         inventory: parsed.inventory || {},
+        neighbors: Array.isArray(parsed.neighbors) ? parsed.neighbors : [],
         processed_queries: parsed.processed_queries || [],
         searches: parsed.searches || [],
         trades: parsed.trades || []
@@ -49,6 +50,7 @@ class Store {
           image_url: this.initial.image_url || ""
         }
       },
+      neighbors: [],
       processed_queries: [],
       searches: [],
       trades: []
@@ -95,6 +97,48 @@ class Store {
   availableQuantity(stickerId) {
     this.expirePendingTrades();
     return this.quantity(stickerId) - this.reservedQuantity(stickerId);
+  }
+
+  neighborList() {
+    return [...new Set(this.state.neighbors || [])].sort();
+  }
+
+  addNeighbor(url) {
+    const normalized = String(url || "").trim();
+    if (!normalized) {
+      return false;
+    }
+    if (!Array.isArray(this.state.neighbors)) {
+      this.state.neighbors = [];
+    }
+    if (this.state.neighbors.includes(normalized)) {
+      return false;
+    }
+    this.state.neighbors.push(normalized);
+    this.state.neighbors.sort();
+    this.save();
+    return true;
+  }
+
+  removeNeighbor(url) {
+    const normalized = String(url || "").trim();
+    if (!normalized || !Array.isArray(this.state.neighbors)) {
+      return false;
+    }
+    const previousLength = this.state.neighbors.length;
+    this.state.neighbors = this.state.neighbors.filter((neighbor) => neighbor !== normalized);
+    if (this.state.neighbors.length === previousLength) {
+      return false;
+    }
+    this.save();
+    return true;
+  }
+
+  clearNeighbors() {
+    const count = Array.isArray(this.state.neighbors) ? this.state.neighbors.length : 0;
+    this.state.neighbors = [];
+    this.save();
+    return count;
   }
 
   registerSticker(stickerId, quantity, imageUrl = "") {
@@ -233,6 +277,19 @@ class Store {
     this.state.searches.push({ ...search, timestamp: new Date().toISOString() });
     this.state.searches = this.state.searches.slice(-MAX_HISTORY);
     this.save();
+  }
+
+  hasSearchHit(peerId, stickerId) {
+    return Boolean(this.findSearchHit(peerId, stickerId));
+  }
+
+  findSearchHit(peerId, stickerId) {
+    const normalizedStickerId = normalizeStickerId(stickerId);
+    return [...this.state.searches].reverse().find((search) =>
+      search.kind === "SEARCH_HIT" &&
+      search.peer_id === peerId &&
+      normalizeStickerId(search.sticker_id) === normalizedStickerId
+    );
   }
 
   addTrade(trade) {

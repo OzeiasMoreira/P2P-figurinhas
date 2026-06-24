@@ -72,6 +72,7 @@ function createApplication(config) {
         config.port = address.port;
         config.advertised_url = `ws://127.0.0.1:${address.port}`;
       }
+      node.clearSavedPeers();
       node.start();
       return address;
     },
@@ -158,7 +159,7 @@ async function handleApi(request, response, url, context) {
 
   if (request.method === "POST" && url.pathname === "/api/trades") {
     const body = await readJson(request);
-    const trade = node.offerTrade(
+    const trade = await node.offerTrade(
       body.peer_id,
       body.offer_sticker_id,
       body.want_sticker_id
@@ -265,7 +266,7 @@ function logEvent(localPeerId, event) {
     return;
   }
   const timestamp = new Date(event.timestamp || Date.now()).toLocaleTimeString("pt-BR");
-  const level = ["connection_error", "protocol_error"].includes(event.type) ||
+  const level = ["connection_error", "protocol_error", "trade_failed"].includes(event.type) ||
     event.status === "failed"
     ? "ERRO"
     : "INFO";
@@ -285,18 +286,41 @@ function eventLogMessage(event) {
       return `Conexao com o proprio no ignorada: ${event.peer_id}` +
         `${event.peer_url ? ` (${event.peer_url})` : ""}`;
     case "search_started":
-      return `Busca iniciada por ${event.sticker_id} com ttl=${event.ttl}`;
+      return `Buscando ${event.sticker_id}, ttl=${event.ttl}`;
+    case "search_received":
+      return `Buscando ${event.sticker_id}, ttl=${event.ttl} recebida de ${event.from_peer_id}` +
+        `${event.receiver_mismatch ? ` (receiver_peer_id veio como ${event.receiver_peer_id})` : ""}`;
     case "search_forwarded":
-      return `Busca ${event.sticker_id} repassada de ${event.from_peer_id} para ${event.to_peer_id}: ttl ${event.previous_ttl} -> ${event.ttl}`;
+      return `Buscando ${event.sticker_id}, ttl=${event.ttl} enviada para ${event.to_peer_id} (${event.previous_ttl} -> ${event.ttl})`;
     case "search_stopped":
       return `Busca ${event.sticker_id} parada em ttl=${event.ttl}`;
     case "search_hit":
       return `${event.sticker_id} encontrada em ${event.peer_id}` +
         `${event.peer_url ? ` (${event.peer_url})` : ""}`;
     case "search_miss":
-      return `${event.sticker_id} nao encontrada em ${event.peer_id}`;
+      if (event.reason === "timeout") {
+        return `${event.sticker_id} nao encontrada: tempo limite da busca esgotado`;
+      }
+      if (event.reason === "no_neighbors") {
+        return `${event.sticker_id} nao encontrada: nenhum vizinho para buscar`;
+      }
+      return `${event.sticker_id} nao encontrada${event.peer_id ? ` em ${event.peer_id}` : ""}`;
     case "trade_offer":
       return `Proposta recebida de ${event.peer_id}: voce recebe ${event.offer_sticker_id} e envia ${event.want_sticker_id}`;
+    case "trade_attempt":
+      return `Tentando propor troca com ${event.peer_id}: oferece ${event.offer_sticker_id}, quer ${event.want_sticker_id}` +
+        `${event.peer_url ? `, URL encontrada ${event.peer_url}` : ", sem URL do SEARCH_HIT"}` +
+        `${event.already_connected ? ", ja conectado" : ", ainda sem conexao direta"}`;
+    case "trade_connecting":
+      return `Conectando em ${event.peer_id} para enviar troca: ${event.peer_url}`;
+    case "trade_connection_ready":
+      return `Conexao pronta com ${event.peer_id} para troca (${event.reason || "ok"})` +
+        `${event.peer_url ? `: ${event.peer_url}` : ""}`;
+    case "trade_connection_missing_url":
+      return `Nao ha peer_url do SEARCH_HIT para conectar em ${event.peer_id} antes da troca`;
+    case "trade_failed":
+      return `Falha ao propor troca com ${event.peer_id}` +
+        `${event.peer_url ? ` (${event.peer_url})` : ""}: ${event.reason || "sem detalhe"}`;
     case "trade_updated":
       return `Troca com ${event.peer_id} mudou para ${event.status}` +
         `${event.offer_sticker_id && event.want_sticker_id
@@ -320,6 +344,8 @@ function eventLogMessage(event) {
 if (require.main === module) {
   const config = loadConfig();
   const app = createApplication(config);
+  let shuttingDown = false;
+
   app.listen()
     .then(() => {
       console.log(`Nó ${config.peer_id} em http://localhost:${config.port}`);
@@ -331,11 +357,23 @@ if (require.main === module) {
     });
 
   const shutdown = async () => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
     await app.close();
     process.exit(0);
   };
+
+  const clearSavedPeersBeforeExit = () => {
+    app.node.clearSavedPeers();
+  };
+
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+  process.on("SIGBREAK", shutdown);
+  process.on("SIGHUP", shutdown);
+  process.on("exit", clearSavedPeersBeforeExit);
 }
 
 module.exports = { createApplication };

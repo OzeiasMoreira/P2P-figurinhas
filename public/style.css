@@ -1,20 +1,23 @@
 :root {
-  color-scheme: light;
-  --background: #f7f4ec;
-  --ink: #111111;
-  --panel: #fffdf6;
-  --panel-light: #f1eadb;
-  --line: #d8cfbd;
-  --text: #171717;
-  --muted: #6c665a;
-  --accent: #006b4f;
-  --accent-dark: #003f87;
-  --danger: #d22730;
-  --warning: #c99a2e;
-  --gold: #d7a83a;
-  --red: #d22730;
-  --blue: #005eb8;
-  --green: #00843d;
+  color-scheme: dark;
+  --background: #071014;
+  --ink: #f4efe2;
+  --panel: #10191f;
+  --panel-light: #162229;
+  --line: #33444f;
+  --text: #f7f2e8;
+  --muted: #b8c0c1;
+  --accent: #28d17c;
+  --accent-dark: #64b5ff;
+  --danger: #ff5a66;
+  --warning: #f1c65b;
+  --gold: #d9aa3d;
+  --red: #ff4e5b;
+  --blue: #3d9bff;
+  --green: #22c46d;
+  --shadow: #020609;
+  --input: #0b141a;
+  --surface: #0d171d;
 }
 
 * {
@@ -29,9 +32,9 @@ body {
   margin: 0;
   min-height: 100vh;
   background:
-    linear-gradient(120deg, rgb(0 94 184 / 12%) 0 16%, transparent 16% 100%),
-    linear-gradient(300deg, transparent 0 72%, rgb(210 39 48 / 13%) 72% 86%, transparent 86%),
-    linear-gradient(35deg, transparent 0 78%, rgb(0 132 61 / 16%) 78% 92%, transparent 92%),
+    linear-gradient(120deg, rgb(61 155 255 / 18%) 0 16%, transparent 16% 100%),
+    linear-gradient(300deg, transparent 0 72%, rgb(255 78 91 / 16%) 72% 86%, transparent 86%),
+    linear-gradient(35deg, transparent 0 78%, rgb(34 196 109 / 18%) 78% 92%, transparent 92%),
     var(--background);
   color: var(--text);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -126,7 +129,7 @@ main {
   border: 2px solid var(--ink);
   border-radius: 8px;
   background: var(--panel);
-  box-shadow: 5px 5px 0 var(--ink);
+  box-shadow: 5px 5px 0 var(--shadow);
 }
 
 .summary span {
@@ -154,7 +157,7 @@ main {
 
 #notice.error {
   border-color: var(--danger);
-  color: #ffd6de;
+  color: var(--danger);
 }
 
 .grid {
@@ -168,7 +171,7 @@ main {
   border: 2px solid var(--ink);
   border-radius: 8px;
   background: var(--panel);
-  box-shadow: 6px 6px 0 var(--ink);
+  box-shadow: 6px 6px 0 var(--shadow);
 }
 
 .wide {
@@ -216,24 +219,24 @@ input {
   width: 100%;
   border: 2px solid var(--ink);
   outline: none;
-  background: #ffffff;
+  background: var(--input);
   color: var(--text);
   padding: 0 12px;
 }
 
 input:focus {
   border-color: var(--accent-dark);
-  box-shadow: 0 0 0 3px rgb(0 94 184 / 14%);
+  box-shadow: 0 0 0 3px rgb(61 155 255 / 22%);
 }
 
 button {
   border: 2px solid var(--ink);
   background: var(--gold);
-  color: var(--ink);
+  color: #0b1117;
   padding: 0 16px;
   font-weight: 800;
   cursor: pointer;
-  box-shadow: 3px 3px 0 var(--ink);
+  box-shadow: 3px 3px 0 var(--shadow);
 }
 
 button:hover {
@@ -243,7 +246,7 @@ button:hover {
 
 button.secondary {
   background: var(--ink);
-  color: #ffffff;
+  color: #081014;
 }
 
 button.reject {
@@ -285,7 +288,7 @@ button.small {
   min-height: 208px;
   border: 2px solid var(--ink);
   border-radius: 6px;
-  background: #fffaf0;
+  background: #172126;
   color: var(--text);
   padding: 0;
   text-align: left;
@@ -298,9 +301,9 @@ button.small {
   place-items: center;
   border-bottom: 2px solid var(--ink);
   background:
-    linear-gradient(145deg, rgb(0 94 184 / 14%), transparent 42%),
-    linear-gradient(35deg, transparent 0 55%, rgb(210 39 48 / 15%) 55% 70%, transparent 70%),
-    #ffffff;
+    linear-gradient(145deg, rgb(61 155 255 / 18%), transparent 42%),
+    linear-gradient(35deg, transparent 0 55%, rgb(255 78 91 / 18%) 55% 70%, transparent 70%),
+    #0d171d;
 }
 
 .sticker img {
@@ -323,7 +326,7 @@ button.small {
   gap: 8px;
   padding: 11px;
   border-top: 4px solid var(--gold);
-  background: #fffdf6;
+  background: #10191f;
 }
 
 .sticker-info span {
@@ -337,23 +340,23 @@ button.small {
   border: 2px solid var(--ink);
   border-radius: 8px;
   background:
-    linear-gradient(90deg, transparent calc(50% - 1px), rgb(17 17 17 / 24%) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)),
-    repeating-linear-gradient(0deg, rgb(216 207 189 / 38%) 0 1px, transparent 1px 24px),
-    #fff7e8;
+    linear-gradient(90deg, transparent calc(50% - 1px), rgb(244 239 226 / 24%) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)),
+    repeating-linear-gradient(0deg, rgb(51 68 79 / 54%) 0 1px, transparent 1px 24px),
+    #0c151b;
 }
 
 .sticker.owned {
-  background: #ffffff;
+  background: #111d24;
 }
 
 .sticker.missing {
-  background: #f3ead9;
+  background: #0f171c;
 }
 
 .sticker.missing .sticker-image {
   background:
-    repeating-linear-gradient(-45deg, rgb(17 17 17 / 7%) 0 8px, transparent 8px 16px),
-    #fff7e8;
+    repeating-linear-gradient(-45deg, rgb(244 239 226 / 9%) 0 8px, transparent 8px 16px),
+    #10191f;
 }
 
 .feed {
@@ -367,7 +370,7 @@ button.small {
   padding: 12px 14px;
   border: 2px solid var(--line);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--surface);
 }
 
 .feed-item {
@@ -389,7 +392,7 @@ button.small {
   padding: 12px;
   border: 2px solid var(--line);
   border-radius: 8px;
-  background: #fff8ea;
+  background: #0c151b;
 }
 
 .connection-groups h3 {
@@ -420,6 +423,13 @@ button.small {
   align-items: center;
   justify-content: end;
   gap: 8px;
+}
+
+.result-actions {
+  display: flex;
+  align-items: center;
+  justify-content: end;
+  gap: 10px;
 }
 
 #inventory-query-form {
@@ -500,7 +510,7 @@ button.small {
   grid-template-columns: 70px 1fr;
   gap: 10px;
   padding: 9px 0;
-  border-bottom: 1px solid rgb(17 17 17 / 16%);
+  border-bottom: 1px solid rgb(244 239 226 / 14%);
 }
 
 .event-time {
@@ -541,7 +551,7 @@ dialog {
   background: var(--panel);
   color: var(--text);
   padding: 24px;
-  box-shadow: 8px 8px 0 var(--ink);
+  box-shadow: 8px 8px 0 var(--shadow);
 }
 
 dialog::backdrop {
